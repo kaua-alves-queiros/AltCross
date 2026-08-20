@@ -1,0 +1,30 @@
+# Core (C / CMake)
+core/build/
+
+# Flutter
+app/.dart_tool/
+app/.packages
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/pubspec.lock
+app/.metadata
+
+# Flutter macOS ephemeral
+app/macos/Flutter/ephemeral/
+
+# Flutter iOS
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/ephemeral/
+
+# Flutter Android
+app/android/.gradle/
+app/android/app/build/
+app/android/local.properties
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.iml
