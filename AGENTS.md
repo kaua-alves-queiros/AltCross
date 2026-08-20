@@ -302,6 +302,11 @@ verdade testável em Dart/C puro (nível 1) antes de expor via FFI (nível 3).
 
 ## Notas para agentes de IA
 
+- **Nunca commite direto na main.** Toda mudança deve ir via branch + pull request.
+  Fluxo obrigatório: crie uma branch (`git checkout -b <tipo>/<descrição>`), faça as
+  alterações, commite na branch, faça push e abra um PR contra `main`. O usuário revisa
+  e faz merge. Exemplos de nomes de branch: `feat/virtual-monitor`, `fix/hotzone-boundary`,
+  `refactor/protocol-parsing`.
 - O repositório já está estruturado (`app/` Flutter, `core/` motor em C, git
   inicializado com remoto no GitHub — ver seção "Estrutura dos Projetos" acima). Não
   proponha recriar essa estrutura do zero; ao adicionar algo novo, siga as convenções
