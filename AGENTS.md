@@ -10,6 +10,12 @@ produto. Qualquer agente de IA (Claude ou outro) trabalhando neste repositório 
 este documento antes de propor mudanças estruturais, e mantê-lo atualizado conforme a
 arquitetura evoluir de fato no código.
 
+> **Escopo atual de desenvolvimento**: o produto final é multiplataforma (Windows,
+> Linux, macOS, Android, iOS — ver seção 6), mas o desenvolvimento ativo agora foca
+> **só em macOS e Windows**. Linux, Android e iOS têm suporte planejado, mas não devem
+> receber trabalho de integração/build agora — não gaste esforço nisso a menos que o
+> usuário peça explicitamente.
+
 ## 🏛️ Arquitetura Técnica do Sistema
 
 ```
@@ -40,6 +46,178 @@ arquitetura evoluir de fato no código.
   latência).
 - **UI em Flutter**: atua apenas como casca de configuração e visualização. Comunica-se
   com o Core em C com zero custo de latência via `dart:ffi`.
+
+## 🗂️ Estrutura dos Projetos
+
+Dois projetos independentes na raiz do repositório, cada um com seu próprio ciclo de
+build/teste. Ainda não existe binding FFI real consumindo o Core a partir do Dart — o
+que existe hoje é só a plumbing de build (ver "Fluxo de Desenvolvimento" abaixo).
+
+### `core/` — motor nativo em C
+
+```
+core/
+├── CMakeLists.txt          # gera 2 alvos a partir das mesmas fontes:
+│                           #   altcross_core        (STATIC, linkado pelos testes)
+│                           #   altcross_core_shared (SHARED -> .dylib/.so/.dll,
+│                           #                          o que o Flutter carrega via FFI)
+│                           # + o executável altcrossd (ver tools/, só em macOS/Windows)
+├── include/altcross/       # headers públicos
+│   ├── export.h            # macro ALTCROSS_API (dllexport/visibility) pra marcar
+│   │                       # símbolos que cruzam a fronteira FFI
+│   ├── hotzone.h           # detecção de borda/canto + resolução pra device_id
+│   ├── input_control.h     # máquina de estados "quem é dono do input agora"
+│   │                       # (local vs. dispositivo remoto) + cálculo de onde o
+│   │                       # cursor entra/sai em cada lado da troca
+│   ├── keycode.h           # enum de tecla neutro (independe de SO — ver mapeamento
+│   │                       # em cada platform_input.c)
+│   ├── platform_input.h    # interface comum de captura/injeção global de
+│   │                       # mouse+teclado (ver src/platform/<so>/)
+│   ├── protocol.h          # pacotes versionados trocados entre as 2 máquinas
+│   │                       # (ENTER/MOUSE_DELTA/MOUSE_BUTTON/KEY/LEAVE)
+│   ├── net_socket.h        # wrapper fino de socket UDP (BSD sockets/Winsock)
+│   ├── pairing.h           # cadastro de dispositivos confiáveis (sobrevive a
+│   │                       # troca de IP), código de confirmação, token secreto,
+│   │                       # identidade estável da máquina local
+│   └── discovery.h         # protocolo de "quem está aí" / "sou eu" por broadcast
+│                           # na rede local (não é mDNS/DNS-SD de verdade, ver nota
+│                           # em "Fluxo de Desenvolvimento")
+├── src/                    # implementação (.c), um arquivo por módulo/domínio
+│   ├── hotzone.c
+│   ├── input_control.c
+│   ├── protocol.c
+│   ├── net_socket.c
+│   ├── pairing.c
+│   ├── discovery.c
+│   └── platform/
+│       ├── macos/platform_input.c   # real, via CGEventTap/CGEventPost — compila
+│       │                            # e é coberto por build nesta sessão (macOS)
+│       └── windows/platform_input.c # real, via SetWindowsHookEx/SendInput — NÃO
+│                                    # compilado/testado nesta sessão (sem Windows)
+├── tools/
+│   └── altcrossd.c         # daemon real que liga tudo (só builda em macOS/Windows)
+│                           # — NUNCA rodar automaticamente, ver aviso no arquivo
+└── tests/                  # testes unitários (framework próprio, sem dependências
+    ├── test_framework.h    # externas — ver "Testes" nas boas práticas)
+    ├── test_framework.c
+    ├── test_main.c         # agrega e roda todos os run_<modulo>_tests()
+    ├── test_hotzone.c
+    ├── test_input_control.c
+    ├── test_protocol.c
+    ├── test_net_socket.c   # inclui round-trip real por socket UDP em loopback
+    ├── test_pairing.c
+    └── test_discovery.c
+```
+
+**Status da funcionalidade "mouse/teclado passa de um PC pro outro"** (seção 2 da
+especificação): lógica de decisão (`input_control`), protocolo de rede
+(`protocol`/`net_socket`), pareamento/identidade persistente (`pairing`) e descoberta
+(`discovery`) estão implementados e com testes passando — tudo isso é testável sem
+tocar em SO de verdade. A captura/injeção real (`platform_input`) está escrita e
+compila no macOS; a versão Windows está escrita mas **nunca compilada nem testada**
+(sem máquina Windows nesta sessão). Falta ainda: (1) o broadcast de descoberta de
+verdade usando `net_socket` (hoje só o encode/decode das mensagens está testado — enviar
+de verdade dispara o prompt de permissão de Rede Local do macOS, por isso não é
+testado automaticamente); (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`)
+usando o código gerado por `pairing.h` sobre a rede; (3) a tela Flutter de
+arranjo/pareamento; (4) rodar `altcrossd` de verdade end-to-end entre 2 máquinas reais.
+**Nunca ative o hook de captura (`altcross_platform_input_start`) automaticamente** —
+isso captura o mouse/teclado real de quem estiver rodando; só rodar manualmente,
+avisando antes.
+
+Convenção ao adicionar um módulo novo (ex.: `clipboard`, `audio_mixer`, `input_inject`):
+um header em `include/altcross/<modulo>.h`, implementação em `src/<modulo>.c`, testes em
+`tests/test_<modulo>.c` com uma função `run_<modulo>_tests(void)` chamada a partir de
+`tests/test_main.c`. Código específico de plataforma (Win32/uinput/CGEvent) entra em
+`src/platform/<so>/` atrás de uma interface comum — nunca `#ifdef` misturado à lógica de
+domínio. Toda função que vai ser chamada pelo Flutter via `dart:ffi` deve ser marcada
+com `ALTCROSS_API` (de `altcross/export.h`) no header — sem isso o símbolo não é
+exportado da DLL no Windows.
+
+Build e testes:
+
+```bash
+cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Debug
+cmake --build core/build
+ctest --test-dir core/build --output-on-failure
+```
+
+### `app/` — UI em Flutter
+
+Projeto Flutter padrão (`flutter create`), com suporte a Windows, Linux, macOS, Android
+e iOS já habilitado. Pastas relevantes para o dia a dia (o resto —
+`android/`, `ios/`, `linux/`, `macos/`, `windows/` — é boilerplate de cada plataforma,
+gerado pelo próprio `flutter create`, e só deve ser tocado para configuração específica
+de plataforma, ex.: registrar o binding FFI nativo):
+
+```
+app/
+├── lib/
+│   ├── main.dart
+│   ├── models/            # modelos de dados puros (equivalentes Dart dos structs do
+│   │   └── hot_zone.dart  # Core em C), com toJson/fromJson
+│   └── state/              # lógica de estado/orquestração da UI (stores/notifiers),
+│       └── hot_zone_config_store.dart  # sem lógica de baixo nível — isso é do Core
+└── test/                   # testes com flutter_test, um arquivo por classe de lib/
+    ├── widget_test.dart
+    └── hot_zone_config_store_test.dart
+```
+
+Convenção: cada arquivo em `lib/state/` ou `lib/models/` tem seu par em `test/` com o
+mesmo nome + `_test.dart`. Widgets de tela (ainda não criados) vão morar em
+`lib/screens/` ou `lib/widgets/`, sempre pequenos e delegando estado para `lib/state/`.
+
+Build e testes:
+
+```bash
+cd app
+flutter analyze
+flutter test
+```
+
+## 🛠️ Fluxo de Desenvolvimento (Dev Build)
+
+O projeto tem três velocidades de build/teste durante o desenvolvimento — use a mais
+rápida que sirva para o que você está fazendo antes de subir para a próxima:
+
+1. **Lógica pura (a maior parte do dia a dia)**: `flutter test` no `app/` e `ctest` no
+   `core/`, sem nunca abrir o app de verdade. É onde mora toda a lógica de negócio
+   testável (ex.: hot zones), e não depende de nenhum build nativo linkado.
+2. **Dev build da UI**: `flutter run -d macos` (ou `linux`/`windows`) dá hot reload real
+   para iterar em telas. Para isso funcionar mesmo antes do FFI existir, a UI só deve
+   falar com o Core através de uma interface Dart (ex.: um `CoreClient` abstrato) — isso
+   **não é mock** (mock é só coisa de teste, ver boas práticas), é uma implementação
+   real trocável; mais tarde a implementação via `dart:ffi` entra atrás dessa mesma
+   interface sem precisar mexer na UI.
+3. **Dev build integrado (UI + Core nativo via FFI)**: builda o `core/` como lib
+   compartilhada (`.so`/`.dylib`/`.dll`) e deixa ela acessível pro processo do Flutter.
+   Implementado hoje (Windows e macOS; Linux ainda não):
+
+   - **Windows — integração direta via CMake, sem script**: `app/windows/CMakeLists.txt`
+     dá `add_subdirectory` no `core/` e instala o `altcross_core.dll` junto do
+     executável (mesma pasta, via a regra `install(...)` que o Flutter já usa pros
+     plugins). Basta rodar `flutter run -d windows` normalmente — o CMake do próprio
+     Flutter builda o Core junto, nada extra a fazer. **Ainda não testado numa máquina
+     Windows de verdade** (só foi possível revisar o CMake nesta sessão, que rodou em
+     macOS) — valide num Windows real antes de confiar 100%.
+   - **macOS — script (`scripts/dev_macos.sh`)**: builda o `core/` com CMake, copia
+     `libaltcross_core.dylib` para `app/build/native/macos/` e então roda
+     `flutter run -d macos`. Não foi feita integração direta no
+     `macos/Runner.xcodeproj` (via build phase do Xcode) porque isso exigiria editar o
+     `project.pbxproj` — arriscado de automatizar sem o CocoaPods funcionando (está
+     quebrado neste ambiente) ou o app Xcode aberto. Quando o FFI real entrar em uso,
+     migrar essa cópia para um build phase de verdade no Xcode (rápido de adicionar
+     manualmente pela IDE) é o passo natural.
+   - **Linux**: não integrado — fora do escopo de desenvolvimento atual (ver nota no
+     topo do arquivo). Fazer só quando o suporte a Linux entrar de fato em pauta.
+
+   Esse é o build mais pesado — use só quando o trabalho for especificamente na
+   fronteira FFI; para todo o resto, fique nos níveis 1 e 2.
+
+**Trade-off a ter em mente**: hot reload do Flutter funciona liso do lado Dart, mas
+qualquer mudança de assinatura/struct do lado C força hot *restart* + rebuild nativo.
+Por isso, mantenha a superfície de FFI pequena e estável, e sempre deixe a lógica de
+verdade testável em Dart/C puro (nível 1) antes de expor via FFI (nível 3).
 
 ## 📋 Especificação Completa de Funcionalidades
 
@@ -157,6 +335,13 @@ siga estas regras.
 - **Sem credenciais ou segredos hardcoded** em código, configs versionadas ou logs.
 - **Commits/PRs pequenos e coerentes**: uma mudança = um propósito. Mensagens de commit
   explicam o *porquê*, não o *o quê* (o diff já mostra o quê).
+- **Mock só em teste, nunca em código real**: dublês de teste (mock/stub/fake/spy) só
+  podem existir dentro de arquivos de teste. Código de produção (C ou Dart) nunca deve
+  conter implementação "fake"/mockada, atalho condicional para ambiente de teste, ou
+  branch de código só para permitir mock (`if (isTest) ...`). Se uma dependência
+  precisa ser substituível em teste, isole-a atrás de uma interface/ponteiro de função
+  real e injete a implementação de teste de fora — a implementação de produção em si
+  nunca sabe que está sendo testada.
 
 ### Core nativo em C
 
