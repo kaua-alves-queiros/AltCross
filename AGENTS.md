@@ -200,14 +200,25 @@ rápida que sirva para o que você está fazendo antes de subir para a próxima:
      Flutter builda o Core junto, nada extra a fazer. **Ainda não testado numa máquina
      Windows de verdade** (só foi possível revisar o CMake nesta sessão, que rodou em
      macOS) — valide num Windows real antes de confiar 100%.
-   - **macOS — script (`scripts/dev_macos.sh`)**: builda o `core/` com CMake, copia
-     `libaltcross_core.dylib` para `app/build/native/macos/` e então roda
-     `flutter run -d macos`. Não foi feita integração direta no
-     `macos/Runner.xcodeproj` (via build phase do Xcode) porque isso exigiria editar o
-     `project.pbxproj` — arriscado de automatizar sem o CocoaPods funcionando (está
-     quebrado neste ambiente) ou o app Xcode aberto. Quando o FFI real entrar em uso,
-     migrar essa cópia para um build phase de verdade no Xcode (rápido de adicionar
-     manualmente pela IDE) é o passo natural.
+   - **macOS — integração direta via build phase no Xcode, sem script**: o
+     `macos/Runner.xcodeproj` tem um Run Script Build Phase (`Build AltCross Core
+     (CMake)`) no target `Runner` que builda `core/` com CMake e copia
+     `libaltcross_core.dylib` para `Contents/Frameworks/` dentro do próprio `.app`.
+     Basta rodar `flutter run -d macos` ou `flutter build macos` normalmente —
+     verificado nesta sessão (`nm` confirma os símbolos `altcross_*` dentro do
+     `.dylib` empacotado no bundle). De propósito **sem output declarado** no build
+     phase (aceita o warning "roda em todo build" do Xcode): declarar o `.dylib` como
+     output faria o Xcode pular o script quando o arquivo já existisse, mesmo que o
+     código-fonte do core tivesse mudado — arriscaria empacotar uma engine
+     desatualizada silenciosamente. O phase foi adicionado programaticamente com a
+     gem `xcodeproj` (mesma lib que o CocoaPods usa por baixo) em vez de editar o
+     `project.pbxproj` na mão — só foi possível porque o CocoaPods deste ambiente,
+     que estava quebrado por causa do `LANG`/`LC_ALL` não apontarem pra UTF-8, foi
+     consertado exportando `LANG=en_US.UTF-8` e `LC_ALL=en_US.UTF-8` antes de rodar
+     `pod`/`ruby`. Se for mexer de novo nesse build phase (ex.: trocar o script), use
+     a mesma gem `xcodeproj` em vez de editar o `.pbxproj` manualmente, e sempre valide
+     depois com `plutil -lint project.pbxproj` e `xcodebuild -list -project
+     Runner.xcodeproj`.
    - **Linux**: não integrado — fora do escopo de desenvolvimento atual (ver nota no
      topo do arquivo). Fazer só quando o suporte a Linux entrar de fato em pauta.
 
@@ -291,15 +302,13 @@ verdade testável em Dart/C puro (nível 1) antes de expor via FFI (nível 3).
 
 ## Notas para agentes de IA
 
-- **Nunca commite direto na main.** Toda mudança deve ir via branch + pull request.
-  Fluxo obrigatório: crie uma branch (`git checkout -b <tipo>/<descrição>`), faça as
-  alterações, commite na branch, faça push e abra um PR contra `main`. O usuário revisa
-  e faz merge. Exemplos de nomes de branch: `feat/virtual-monitor`, `fix/hotzone-boundary`,
-  `refactor/protocol-parsing`.
-- Este projeto ainda não tem código-fonte (repositório recém-criado, sem git
-  inicializado). Ao começar a implementação, proponha e confirme com o usuário a
-  estrutura de diretórios (ex.: `app/` para o Flutter, `core/` ou `native/` para o
-  daemon em C, e o binding FFI entre eles) antes de gerar muitos arquivos.
+- O repositório já está estruturado (`app/` Flutter, `core/` motor em C, git
+  inicializado com remoto no GitHub — ver seção "Estrutura dos Projetos" acima). Não
+  proponha recriar essa estrutura do zero; ao adicionar algo novo, siga as convenções
+  já estabelecidas em cada pasta.
+- **Nunca dê `git push`/`git commit` sem o usuário pedir explicitamente** — o
+  repositório tem remoto real configurado (`origin` no GitHub), então um push afeta
+  algo visível fora desta máquina.
 - O Core em C lida com drivers de kernel/sistema (monitor virtual, injeção de input,
   áudio virtual) — mudanças nessa camada são sensíveis por plataforma (Windows, Linux,
   macOS) e devem ser tratadas com cautela, já que normalmente exigem privilégios
