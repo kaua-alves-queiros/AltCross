@@ -50,8 +50,9 @@ arquitetura evoluir de fato no código.
 ## 🗂️ Estrutura dos Projetos
 
 Dois projetos independentes na raiz do repositório, cada um com seu próprio ciclo de
-build/teste. Ainda não existe binding FFI real consumindo o Core a partir do Dart — o
-que existe hoje é só a plumbing de build (ver "Fluxo de Desenvolvimento" abaixo).
+build/teste. Já existe um binding FFI real (não é só plumbing de build): a enumeração
+de monitores físicos (`altcross_displays_enumerate`, ver `displays.h` abaixo) é chamada
+de verdade pelo Dart via `dart:ffi` em `app/lib/native/altcross_native.dart`.
 
 ### `core/` — motor nativo em C
 
@@ -79,9 +80,11 @@ core/
 │   ├── pairing.h           # cadastro de dispositivos confiáveis (sobrevive a
 │   │                       # troca de IP), código de confirmação, token secreto,
 │   │                       # identidade estável da máquina local
-│   └── discovery.h         # protocolo de "quem está aí" / "sou eu" por broadcast
-│                           # na rede local (não é mDNS/DNS-SD de verdade, ver nota
-│                           # em "Fluxo de Desenvolvimento")
+│   ├── discovery.h         # protocolo de "quem está aí" / "sou eu" por broadcast
+│   │                       # na rede local (não é mDNS/DNS-SD de verdade, ver nota
+│   │                       # em "Fluxo de Desenvolvimento")
+│   └── displays.h          # enumeração dos monitores físicos reais da máquina —
+│                           # é o binding FFI que a tela de arranjo usa de verdade
 ├── src/                    # implementação (.c), um arquivo por módulo/domínio
 │   ├── hotzone.c
 │   ├── input_control.c
@@ -92,11 +95,20 @@ core/
 │   └── platform/
 │       ├── macos/platform_input.c   # real, via CGEventTap/CGEventPost — compila
 │       │                            # e é coberto por build nesta sessão (macOS)
-│       └── windows/platform_input.c # real, via SetWindowsHookEx/SendInput — NÃO
-│                                    # compilado/testado nesta sessão (sem Windows)
+│       ├── macos/displays.m         # real, via NSScreen (único .m do Core —
+│       │                            # precisa de Objective-C; ver enable_language(OBJC)
+│       │                            # no CMakeLists) — testado nesta sessão com `nm` e
+│       │                            # rodando list_displays de verdade (achou os 2
+│       │                            # monitores reais desta máquina)
+│       ├── windows/platform_input.c # real, via SetWindowsHookEx/SendInput — NÃO
+│       │                            # compilado/testado nesta sessão (sem Windows)
+│       └── windows/displays.c       # real, via EnumDisplayMonitors — mesma ressalva
+│                                    # acima (não compilado/testado nesta sessão)
 ├── tools/
-│   └── altcrossd.c         # daemon real que liga tudo (só builda em macOS/Windows)
-│                           # — NUNCA rodar automaticamente, ver aviso no arquivo
+│   ├── altcrossd.c         # daemon real que liga tudo (só builda em macOS/Windows)
+│   │                       # — NUNCA rodar automaticamente, ver aviso no arquivo
+│   └── list_displays.c     # ferramenta segura (só lê monitores, sem captura de
+│                           # input nem rede) — pode rodar manualmente sem aviso
 └── tests/                  # testes unitários (framework próprio, sem dependências
     ├── test_framework.h    # externas — ver "Testes" nas boas práticas)
     ├── test_framework.c
@@ -115,15 +127,22 @@ especificação): lógica de decisão (`input_control`), protocolo de rede
 (`discovery`) estão implementados e com testes passando — tudo isso é testável sem
 tocar em SO de verdade. A captura/injeção real (`platform_input`) está escrita e
 compila no macOS; a versão Windows está escrita mas **nunca compilada nem testada**
-(sem máquina Windows nesta sessão). Falta ainda: (1) o broadcast de descoberta de
-verdade usando `net_socket` (hoje só o encode/decode das mensagens está testado — enviar
-de verdade dispara o prompt de permissão de Rede Local do macOS, por isso não é
-testado automaticamente); (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`)
-usando o código gerado por `pairing.h` sobre a rede; (3) a tela Flutter de
-arranjo/pareamento; (4) rodar `altcrossd` de verdade end-to-end entre 2 máquinas reais.
-**Nunca ative o hook de captura (`altcross_platform_input_start`) automaticamente** —
-isso captura o mouse/teclado real de quem estiver rodando; só rodar manualmente,
-avisando antes.
+(sem máquina Windows nesta sessão). A enumeração de monitores físicos (`displays`) está
+implementada, compila no macOS e **já tem FFI real ligado na tela de arranjo**
+(`app/lib/screens/arrangement_screen.dart`), que mostra as telas físicas de verdade
+desta máquina. Falta ainda: (1) o broadcast de descoberta de verdade usando
+`net_socket` (hoje só o encode/decode das mensagens está testado — enviar de verdade
+dispara o prompt de permissão de Rede Local do macOS, por isso não é testado
+automaticamente); (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`) usando
+o código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos" na
+tela de arranjo são só nomes digitados manualmente, não pareados de verdade; (3) trocar
+a resolução de tela real do dispositivo remoto (hoje a tela de arranjo assume Full HD
+por padrão pra todo mundo, até o pareamento trocar essa informação de verdade); (4)
+rodar `altcrossd` de verdade end-to-end entre 2 máquinas reais. **Nunca ative o hook de
+captura (`altcross_platform_input_start`) automaticamente** — isso captura o
+mouse/teclado real de quem estiver rodando; só rodar manualmente, avisando antes. Já
+`list_displays`/`altcross_displays_enumerate` são seguros de rodar automaticamente
+(só leem os monitores, não capturam nada).
 
 Convenção ao adicionar um módulo novo (ex.: `clipboard`, `audio_mixer`, `input_inject`):
 um header em `include/altcross/<modulo>.h`, implementação em `src/<modulo>.c`, testes em
@@ -153,19 +172,42 @@ de plataforma, ex.: registrar o binding FFI nativo):
 ```
 app/
 ├── lib/
-│   ├── main.dart
-│   ├── models/            # modelos de dados puros (equivalentes Dart dos structs do
-│   │   └── hot_zone.dart  # Core em C), com toJson/fromJson
-│   └── state/              # lógica de estado/orquestração da UI (stores/notifiers),
-│       └── hot_zone_config_store.dart  # sem lógica de baixo nível — isso é do Core
+│   ├── main.dart           # monta o MaterialApp e a HotZoneConfigStore raiz
+│   ├── models/             # modelos de dados puros
+│   │   ├── hot_zone.dart          # equivalente Dart dos structs de hotzone do Core,
+│   │   │                          # com toJson/fromJson
+│   │   └── physical_display.dart  # equivalente Dart de altcross_display_t
+│   ├── native/             # única pasta que fala dart:ffi com o Core — todo o resto
+│   │   └── altcross_native.dart   # do app passa por aqui, nunca `dart:ffi` direto
+│   │                               # em outro lugar. DynamicLibrary.open resolve o
+│   │                               # caminho do .dylib/.dll relativo ao executável.
+│   ├── services/           # lógica pura de UI que não é estado nem modelo
+│   │   └── arrangement.dart  # geometria de "que borda esse retângulo está tocando"
+│   │                          # — usada pelo arrangement_screen, testável sem widget
+│   ├── state/              # lógica de estado/orquestração da UI (stores/notifiers),
+│   │   └── hot_zone_config_store.dart  # sem lógica de baixo nível — isso é do Core
+│   └── screens/            # telas — pequenas, delegam estado pra lib/state/
+│       └── arrangement_screen.dart  # tela de arranjo: mostra as telas físicas reais
+│                                     # (via native/) + dispositivos remotos
+│                                     # arrastáveis, grudando na borda mais próxima
 └── test/                   # testes com flutter_test, um arquivo por classe de lib/
-    ├── widget_test.dart
-    └── hot_zone_config_store_test.dart
+    ├── widget_test.dart              # smoke test do AltCrossApp
+    ├── hot_zone_config_store_test.dart
+    ├── arrangement_test.dart         # testa a geometria pura de arrangement.dart
+    └── arrangement_screen_test.dart  # testa render/add/remove; arrastar de verdade
+                                       # (drag) não é testado automaticamente — a
+                                       # escala do canvas é dinâmica e recalculada a
+                                       # cada frame, o que torna simular um arrasto
+                                       # pixel-perfeito no teste frágil demais pro
+                                       # benefício; validar arrastando manualmente
 ```
 
-Convenção: cada arquivo em `lib/state/` ou `lib/models/` tem seu par em `test/` com o
-mesmo nome + `_test.dart`. Widgets de tela (ainda não criados) vão morar em
-`lib/screens/` ou `lib/widgets/`, sempre pequenos e delegando estado para `lib/state/`.
+Convenção: cada arquivo em `lib/state/`, `lib/models/`, `lib/services/` ou `lib/screens/`
+tem seu par em `test/` com o mesmo nome + `_test.dart` (exceto `lib/native/`, que só
+compila com a lib nativa de verdade presente — ver limitação de teste acima). Telas
+ficam em `lib/screens/`, sempre pequenas e delegando estado para `lib/state/` (ver
+`arrangement_screen.dart` — a tela não decide regra de negócio, só chama
+`store.add/remove` e a geometria pura de `services/arrangement.dart`).
 
 Build e testes:
 
