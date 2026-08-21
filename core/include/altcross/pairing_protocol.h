@@ -38,6 +38,16 @@ typedef struct {
     int code;
 } altcross_pairing_incoming_request_t;
 
+/* Notificação pro lado de quem RECEBEU o pedido (B): o CONFIRM chegou com o
+ * código certo e o pareamento foi salvo como confiável — sem isso, B nunca
+ * fica sabendo que A digitou o código certo e terminou o pareamento; só A
+ * sabe (via altcross_pairing_confirm retornando 1). */
+typedef struct {
+    int pending;
+    char peer_device_id[ALTCROSS_DEVICE_ID_SIZE];
+    char peer_name[ALTCROSS_DEVICE_NAME_SIZE];
+} altcross_pairing_completed_t;
+
 /* Sobe a thread de fundo que escuta ALTCROSS_PAIRING_PORT e processa
  * REQUEST/CONFIRM de verdade pela rede. my_device_id/my_name são copiados
  * internamente. store_path é onde o cadastro de dispositivos confiáveis é
@@ -57,6 +67,14 @@ ALTCROSS_API void altcross_pairing_stop_responder(void);
  * pedido pendente (preenche *out), 0 caso contrário. */
 ALTCROSS_API int altcross_pairing_poll_incoming_request(
     altcross_pairing_incoming_request_t *out);
+
+/* Consome (lê e limpa a flag `pending`) a notificação de pareamento
+ * concluído, do lado de quem RECEBEU o pedido — é assim que a UI de B
+ * descobre que A confirmou o código certo e já pode mostrar sucesso /
+ * cadastrar a conexão do lado dela também. Retorna 1 se havia uma
+ * notificação pendente (preenche *out), 0 caso contrário. */
+ALTCROSS_API int altcross_pairing_poll_completed(
+    altcross_pairing_completed_t *out);
 
 /* Lado de quem inicia: manda um PAIR_REQUEST de verdade pra peer_host (porta
  * fixa ALTCROSS_PAIRING_PORT). Não espera resposta — o código aparece do
