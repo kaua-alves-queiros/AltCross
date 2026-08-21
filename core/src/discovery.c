@@ -142,6 +142,20 @@ int altcross_discovery_run_query(const char *from_device_id, int timeout_ms,
         altcross_socket_close(sock);
         return -1;
     }
+    /* 255.255.255.255 sozinho depende de qual interface o SO escolhe pela
+     * tabela de rotas — numa máquina com várias interfaces ativas (VPN,
+     * VirtualBox, Docker, Hyper-V, WSL etc.) isso pode sair pela interface
+     * errada e nunca chegar na rede de verdade. Manda também pro endereço
+     * de broadcast dirigido de cada interface real, cobrindo todas. */
+    char iface_broadcasts[8][ALTCROSS_BROADCAST_ADDRESS_SIZE];
+    int iface_count = altcross_net_list_broadcast_addresses(
+        (char *)iface_broadcasts, ALTCROSS_BROADCAST_ADDRESS_SIZE, 8);
+    int iface_shown = iface_count < 8 ? iface_count : 8;
+    for (int i = 0; i < iface_shown; i++) {
+        altcross_socket_send_to(sock, iface_broadcasts[i],
+                                 ALTCROSS_DISCOVERY_PORT, query_buf,
+                                 (size_t)query_len);
+    }
     altcross_socket_send_to(sock, ALTCROSS_DISCOVERY_BROADCAST_ADDRESS,
                              ALTCROSS_DISCOVERY_PORT, query_buf,
                              (size_t)query_len);
@@ -175,6 +189,22 @@ int altcross_discovery_run_query(const char *from_device_id, int timeout_ms,
             continue; /* ignora nosso próprio QUERY ecoado pelo broadcast */
         }
         if (strcmp(reply.device_id, from_device_id) == 0) {
+            continue;
+        }
+
+        /* a mesma máquina pode responder mais de uma vez (o pedido saiu por
+         * várias interfaces/endereços de broadcast) — deduplica por
+         * device_id pra não listar o mesmo dispositivo repetido. */
+        int already_found = 0;
+        int already_shown = found < max_count ? found : max_count;
+        for (int i = 0; i < already_shown; i++) {
+            if (strcmp(out_device_ids + (size_t)i * ALTCROSS_DEVICE_ID_SIZE,
+                       reply.device_id) == 0) {
+                already_found = 1;
+                break;
+            }
+        }
+        if (already_found) {
             continue;
         }
 
