@@ -1,11 +1,20 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'models/physical_display.dart';
+import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
 import 'state/hot_zone_config_store.dart';
 
 void main() {
+  // Só escuta e responde via unicast — não manda broadcast, então não
+  // deveria disparar o prompt de permissão de Rede Local por si só (ver
+  // AltCrossNative.startDiscoveryResponder). É isso que faz esta máquina
+  // aparecer quando outra roda "Buscar dispositivos".
+  AltCrossNative.startDiscoveryResponder(name: Platform.localHostname);
+
   runApp(AltCrossApp(store: HotZoneConfigStore()));
 }
 

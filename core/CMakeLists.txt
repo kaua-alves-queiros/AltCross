@@ -27,6 +27,12 @@ set(ALTCROSS_CORE_SOURCES
     src/discovery.c
 )
 
+# discovery.c usa pthread (POSIX) pra thread do respondedor de descoberta —
+# no Windows usa CreateThread/kernel32 direto, não precisa disso.
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+endif()
+
 # Código de captura/injeção de mouse e teclado é específico de plataforma —
 # um arquivo por SO, atrás da interface comum altcross/platform_input.h (ver
 # "Boas Práticas" no AGENTS.md). Fora de macOS/Windows ele simplesmente não
@@ -37,13 +43,15 @@ if(APPLE)
         src/platform/macos/platform_input.c
         src/platform/macos/displays.m
     )
-    list(APPEND ALTCROSS_PLATFORM_LIBS "-framework ApplicationServices" "-framework AppKit")
+    list(APPEND ALTCROSS_PLATFORM_LIBS "-framework ApplicationServices" "-framework AppKit" Threads::Threads)
 elseif(WIN32)
     list(APPEND ALTCROSS_CORE_SOURCES
         src/platform/windows/platform_input.c
         src/platform/windows/displays.c
     )
     list(APPEND ALTCROSS_PLATFORM_LIBS user32 ws2_32)
+else()
+    list(APPEND ALTCROSS_PLATFORM_LIBS Threads::Threads)
 endif()
 
 # Lib estática: usada pelo executável de testes (build rápido, sem custo de
@@ -88,8 +96,11 @@ if(APPLE OR WIN32)
     add_executable(altcrossd tools/altcrossd.c)
     target_link_libraries(altcrossd PRIVATE altcross_core)
 
-    # Ferramenta segura (só lê monitores, não captura input nem abre rede) —
-    # pode rodar automaticamente/manualmente sem aviso nenhum.
+    # Ferramentas seguras (não capturam input nem hook global) — podem rodar
+    # automaticamente/manualmente sem aviso nenhum.
     add_executable(list_displays tools/list_displays.c)
     target_link_libraries(list_displays PRIVATE altcross_core)
+
+    add_executable(discovery_demo tools/discovery_demo.c)
+    target_link_libraries(discovery_demo PRIVATE altcross_core)
 endif()

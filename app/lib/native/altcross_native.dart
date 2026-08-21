@@ -50,6 +50,14 @@ typedef _RunDiscoveryDart = int Function(
     Pointer<Uint8> outHosts,
     int maxCount);
 
+typedef _StartResponderNative = Int32 Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name, Int32 port);
+typedef _StartResponderDart = int Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name, int port);
+
+typedef _StopResponderNative = Void Function();
+typedef _StopResponderDart = void Function();
+
 const int _maxDisplays = 16;
 
 // Precisam bater exatamente com core/include/altcross/pairing.h e
@@ -152,14 +160,52 @@ class AltCrossNative {
     }
   }
 
+  static bool _responderStarted = false;
+
+  /// Sobe o respondedor de descoberta (ver `altcross_discovery_start_
+  /// responder`): a partir daqui, esta máquina passa a responder quando
+  /// outra rodar `runDiscovery`. Só escuta e responde via unicast — não
+  /// manda broadcast, então não deveria disparar o prompt de permissão de
+  /// Rede Local por si só (quem dispara isso é `runDiscovery`, do lado de
+  /// quem pergunta). Idempotente: chamar de novo não faz nada se já estiver
+  /// rodando.
+  static void startDiscoveryResponder({required String name, int port = 0}) {
+    if (_responderStarted) {
+      return;
+    }
+
+    final start = _library()
+        .lookup<NativeFunction<_StartResponderNative>>(
+            'altcross_discovery_start_responder')
+        .asFunction<_StartResponderDart>();
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final nameNative = name.toNativeUtf8();
+    try {
+      final rc = start(deviceIdNative, nameNative, port);
+      _responderStarted = rc == 0;
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(nameNative);
+    }
+  }
+
+  static void stopDiscoveryResponder() {
+    if (!_responderStarted) {
+      return;
+    }
+    _library()
+        .lookup<NativeFunction<_StopResponderNative>>(
+            'altcross_discovery_stop_responder')
+        .asFunction<_StopResponderDart>()();
+    _responderStarted = false;
+  }
+
   /// Busca dispositivos AltCross na rede local (broadcast UDP de verdade —
   /// ver aviso em altcross_discovery_run_query no Core sobre o prompt de
   /// permissão de Rede Local). Roda numa isolate separada pra não travar a
-  /// UI enquanto espera respostas por [timeoutMs].
-  ///
-  /// LIMITAÇÃO ATUAL: só o lado que pergunta está pronto — encontra outra
-  /// máquina só se ela estiver rodando algo que responda à pergunta (o
-  /// daemon `altcrossd` ainda não implementa esse lado). Ver AGENTS.md.
+  /// UI enquanto espera respostas por [timeoutMs]. Só encontra máquinas com
+  /// o respondedor rodando (ver `startDiscoveryResponder`).
   static Future<List<DiscoveredDevice>> runDiscovery({
     int timeoutMs = 1500,
     int maxResults = 16,

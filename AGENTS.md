@@ -114,8 +114,11 @@ core/
 ├── tools/
 │   ├── altcrossd.c         # daemon real que liga tudo (só builda em macOS/Windows)
 │   │                       # — NUNCA rodar automaticamente, ver aviso no arquivo
-│   └── list_displays.c     # ferramenta segura (só lê monitores, sem captura de
-│                           # input nem rede) — pode rodar manualmente sem aviso
+│   ├── list_displays.c     # ferramenta segura (só lê monitores, sem captura de
+│   │                       # input nem rede) — pode rodar manualmente sem aviso
+│   └── discovery_demo.c    # ferramenta segura (`responder`/`query`) usada pra
+│                           # verificar a descoberta de rede de ponta a ponta com
+│                           # processos reais — sem hook de input, roda sem aviso
 └── tests/                  # testes unitários (framework próprio, sem dependências
     ├── test_framework.h    # externas — ver "Testes" nas boas práticas)
     ├── test_framework.c
@@ -138,29 +141,52 @@ Core passa num Windows real (build + ctest verificados), mas a captura/injeção
 runtime ainda não foi exercitada de verdade. A enumeração de monitores físicos (`displays`) está
 implementada, compila no macOS e **já tem FFI real ligado na tela de arranjo**
 (`app/lib/screens/arrangement_screen.dart`), que mostra as telas físicas de verdade
-desta máquina. A descoberta na rede (`discovery`) também já tem FFI real ligado na
-tela de Conexões (`app/lib/screens/connections_screen.dart`, botão "Buscar
-dispositivos" → `AltCrossNative.runDiscovery`, que roda numa isolate Dart pra não
-travar a UI enquanto espera resposta — ver "não trave a UI thread" nas Boas Práticas).
-**Limitação importante da descoberta**: só o lado que pergunta está pronto —
-`altcrossd` ainda não roda um respondedor que escuta `ALTCROSS_DISCOVERY_MSG_QUERY` e
-responde; então o botão só vai achar alguma coisa quando essa peça existir (ou entre 2
-processos que a gente rode manualmente pra testar). Falta ainda: (1) implementar esse
-respondedor no `altcrossd`; (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`)
-usando o código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos"
-tanto na tela de arranjo quanto os "encontrados" na tela de Conexões não são pareados de
+desta máquina. **A descoberta na rede está completa e verificada end-to-end de
+verdade** — não é só o lado que pergunta: `altcross_discovery_start_responder`
+(`discovery.c`) sobe uma thread real (pthread no macOS/Linux, `CreateThread` no
+Windows) que escuta `ALTCROSS_DISCOVERY_PORT` e responde a quem perguntar. O app
+Flutter chama isso automaticamente ao abrir (`main()`, via
+`AltCrossNative.startDiscoveryResponder`) — só escuta/responde por unicast, nunca
+manda broadcast sozinho, então não aciona o prompt de permissão de Rede Local por
+conta própria. O botão "Buscar dispositivos" na tela de Conexões
+(`AltCrossNative.runDiscovery`, rodando numa isolate Dart) já usa esse caminho de
+verdade.
+
+Verificado nesta sessão rodando processos reais, não só lido/assumido: (1) dois
+processos `discovery_demo` (`core/tools/discovery_demo.c`, ferramenta segura de
+verificação manual, sem hook de input) — um como `responder`, outro como `query` —
+se encontraram de verdade pelo IP real da máquina; (2) o **app de verdade** (buildado
+via `flutter build macos`, rodado como processo real) foi encontrado por um
+`discovery_demo query` externo, retornando seu hostname real e o device_id gerado.
+Nesse processo achei e corrigi um bug real: o app roda com **App Sandbox** habilitado
+(`macos/Runner/*.entitlements`) e tinha `com.apple.security.network.server` mas
+**faltava `com.apple.security.network.client`** — o socket conseguia fazer bind e
+receber (por isso a busca parecia "não achar nada" silenciosamente), mas o sandbox
+bloqueava o `sendto` da resposta. Corrigido em `DebugProfile.entitlements` e
+`Release.entitlements` (os dois precisam de `network.client` E `network.server`, já
+que o mesmo processo pergunta E responde). Fique de olho nisso ao adicionar qualquer
+funcionalidade de rede nova — App Sandbox no macOS é silencioso quando bloqueia, não
+lança erro nenhum do lado do socket, só a operação nunca completa.
+
+Falta ainda: (1) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`) usando o
+código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos" tanto
+na tela de arranjo quanto os "encontrados" na tela de Conexões não são pareados de
 verdade (arranjo: nome digitado manualmente; conexões: dado bruto da resposta de
-descoberta, sem autenticação); (3) trocar a resolução de tela real do dispositivo remoto
-(hoje a tela de arranjo assume Full HD por padrão pra todo mundo, até o pareamento trocar
-essa informação de verdade); (4) rodar `altcrossd` de verdade end-to-end entre 2
-máquinas reais. **Nunca ative o hook de captura (`altcross_platform_input_start`)
-automaticamente** — isso captura o mouse/teclado real de quem estiver rodando; só rodar
-manualmente, avisando antes. Já `list_displays`/`altcross_displays_enumerate` são
-seguros de rodar automaticamente (só leem os monitores, não capturam nada); o broadcast
-de descoberta (`altcross_discovery_run_query`/`altcross_socket_enable_broadcast`) é
-seguro no sentido de não capturar nada, mas aciona o prompt de permissão de Rede Local
-do SO — só chamar a partir de uma ação explícita do usuário (o botão já faz isso certo),
-nunca automaticamente ao abrir a tela.
+descoberta, sem autenticação, e a porta de pareamento ainda vai sempre `0` já que
+`startDiscoveryResponder` não tem uma porta real de pareamento pra anunciar ainda);
+(2) trocar a resolução de tela real do dispositivo remoto (hoje a tela de arranjo
+assume Full HD por padrão pra todo mundo, até o pareamento trocar essa informação de
+verdade); (3) rodar `altcrossd` (o daemon de mouse/teclado) de verdade end-to-end
+entre 2 máquinas reais — note que a descoberta (responder automático no app Flutter)
+e o handoff de mouse/teclado (`altcrossd`, hook global) são caminhos **separados**
+hoje; a descoberta não depende do daemon arriscado rodar. **Nunca ative o hook de
+captura (`altcross_platform_input_start`) automaticamente** — isso captura o
+mouse/teclado real de quem estiver rodando; só rodar manualmente, avisando antes. Já
+`list_displays`, `discovery_demo` e o respondedor de descoberta
+(`altcross_discovery_start_responder`) são seguros de rodar/ligar automaticamente (não
+capturam input, só rede); só o `altcross_discovery_run_query` (lado que pergunta,
+manda broadcast) deve ficar atrás de uma ação explícita do usuário — o botão já faz
+isso certo.
 
 Convenção ao adicionar um módulo novo (ex.: `clipboard`, `audio_mixer`, `input_inject`):
 um header em `include/altcross/<modulo>.h`, implementação em `src/<modulo>.c`, testes em

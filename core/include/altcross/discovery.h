@@ -65,10 +65,8 @@ ALTCROSS_API int altcross_discovery_decode(
  * informado — do lado Flutter, rodar isso dentro de uma isolate (ver
  * "não trave a UI thread" no AGENTS.md).
  *
- * IMPORTANTE: isso só ENCONTRA outra máquina se ela estiver rodando algo
- * que responde a ALTCROSS_DISCOVERY_MSG_QUERY — o daemon (altcrossd) ainda
- * não implementa esse lado de "responder" (só o cliente que pergunta está
- * pronto aqui). Ver "Status da funcionalidade" no AGENTS.md.
+ * Só ENCONTRA outra máquina se ela estiver com o respondedor rodando (ver
+ * altcross_discovery_start_responder abaixo).
  *
  * Preenche os buffers de saída (paralelos, cada um com max_count posições
  * reservadas pelo chamador):
@@ -85,5 +83,25 @@ ALTCROSS_API int altcross_discovery_run_query(const char *from_device_id,
                                                char *out_device_ids,
                                                char *out_names, int *out_ports,
                                                char *out_hosts, int max_count);
+
+/* Sobe uma thread de fundo que fica escutando ALTCROSS_DISCOVERY_PORT e
+ * responde com nosso device_id/name/port a toda pergunta que chegar (menos
+ * a nossa própria, se por algum motivo ela voltar pra nós). É isso que faz
+ * esta máquina ser ENCONTRADA por altcross_discovery_run_query rodando em
+ * outra máquina (ou noutro processo). Só escuta e responde via unicast pra
+ * quem perguntou — nunca manda broadcast, então não deveria por si só
+ * acionar o prompt de permissão de Rede Local (isso é acionado por quem
+ * chama altcross_discovery_run_query, o lado que pergunta).
+ *
+ * device_id/name são copiados internamente (podem ser liberados pelo
+ * chamador depois de retornar). Retorna 0 em sucesso, diferente de zero se
+ * já tiver um respondedor rodando ou não conseguir abrir a porta. */
+ALTCROSS_API int altcross_discovery_start_responder(const char *device_id,
+                                                      const char *name,
+                                                      int port);
+
+/* Para a thread do respondedor (bloqueia até ela terminar de verdade). Não
+ * faz nada se não estiver rodando. */
+ALTCROSS_API void altcross_discovery_stop_responder(void);
 
 #endif
