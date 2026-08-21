@@ -17,6 +17,11 @@ typedef PushZoneToPeer = bool Function({
   required HotZoneEdge myEdge,
   required int targetScreenIndex,
 });
+typedef SetLocalDisplayOrigin = bool Function({
+  required int displayId,
+  required int x,
+  required int y,
+});
 
 /// Tamanho só de ENQUANTO a tela real de um dispositivo remoto ainda não foi
 /// confirmada pela rede (carregando, nunca pareado, ou offline agora) — o
@@ -58,11 +63,18 @@ class _ScreenBox {
   Offset position;
   Size size;
 
+  /// Id estável do monitor físico (ver `PhysicalDisplay.displayId`) — só
+  /// telas locais têm um (é o que permite `setLocalDisplayOrigin`
+  /// reposicionar de verdade); telas remotas ficam com null porque nunca
+  /// dá pra mover um monitor de outra máquina daqui.
+  final int? displayId;
+
   _ScreenBox({
     required this.label,
     required this.position,
     required this.size,
     this.deviceId,
+    this.displayId,
   });
 
   bool get isLocal => deviceId == null;
@@ -115,6 +127,7 @@ class ArrangementScreen extends StatefulWidget {
   final LookupTrustedHost lookupHost;
   final QueryPeerScreens queryPeerScreens;
   final PushZoneToPeer pushZoneToPeer;
+  final SetLocalDisplayOrigin setLocalDisplayOrigin;
 
   ArrangementScreen({
     super.key,
@@ -123,11 +136,14 @@ class ArrangementScreen extends StatefulWidget {
     LookupTrustedHost? lookupHost,
     QueryPeerScreens? queryPeerScreens,
     PushZoneToPeer? pushZoneToPeer,
+    SetLocalDisplayOrigin? setLocalDisplayOrigin,
   })  : displayProvider = displayProvider ?? AltCrossNative.enumerateDisplays,
         lookupHost = lookupHost ?? AltCrossNative.lookupTrustedHost,
         queryPeerScreens = queryPeerScreens ??
             ((host) => AltCrossNative.queryPeerScreens(peerHost: host)),
-        pushZoneToPeer = pushZoneToPeer ?? AltCrossNative.pushZoneToPeer;
+        pushZoneToPeer = pushZoneToPeer ?? AltCrossNative.pushZoneToPeer,
+        setLocalDisplayOrigin =
+            setLocalDisplayOrigin ?? AltCrossNative.setLocalDisplayOrigin;
 
   @override
   State<ArrangementScreen> createState() => _ArrangementScreenState();
@@ -156,6 +172,7 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
             : '${display.width.round()}×${display.height.round()}',
         position: Offset(display.x, display.y),
         size: Size(display.width, display.height),
+        displayId: display.displayId,
       ));
     }
     final seenDeviceIds = <String>{};
@@ -380,8 +397,10 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       return;
     }
     if (boxA.isLocal && boxB.isLocal) {
-      _replaceConnection(boxA, edgeA, boxB, edgeB);
-      _message = null;
+      if (_repositionLocalBox(boxA, boxB, edgeB)) {
+        _replaceConnection(boxA, edgeA, boxB, edgeB);
+        _message = null;
+      }
       return;
     }
 
@@ -429,6 +448,74 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       myEdge: localEdge,
       targetScreenIndex: 0,
     );
+  }
+
+  /// Encosta `moving` de verdade, no sistema operacional, na borda `moving`
+  /// que foi tocada — reposiciona o monitor físico real (não é só desenhar
+  /// mais perto no canvas), por isso "conectar 2 telas locais" agora arruma
+  /// de verdade em vez de ser só visual. Retorna false (e deixa `_message`
+  /// com o motivo) se não deu pra mover de verdade — nesse caso NENHUMA
+  /// conexão visual é registrada, pra não fingir que funcionou.
+  bool _repositionLocalBox(
+      _ScreenBox anchor, _ScreenBox moving, HotZoneEdge movingEdge) {
+    final displayId = moving.displayId;
+    if (displayId == null) {
+      _message =
+          'Não sei qual monitor é esse (sem id de tela) — não dá pra mover de verdade.';
+      return false;
+    }
+
+    double newX = moving.position.dx;
+    double newY = moving.position.dy;
+    switch (movingEdge) {
+      case HotZoneEdge.left:
+        newX = anchor.rect.right;
+        break;
+      case HotZoneEdge.right:
+        newX = anchor.rect.left - moving.size.width;
+        break;
+      case HotZoneEdge.top:
+        newY = anchor.rect.bottom;
+        break;
+      case HotZoneEdge.bottom:
+        newY = anchor.rect.top - moving.size.height;
+        break;
+      default:
+        _message =
+            'Só dá pra encostar telas locais pelas bordas retas (cima/baixo/esquerda/direita).';
+        return false;
+    }
+
+    final ok = widget.setLocalDisplayOrigin(
+      displayId: displayId,
+      x: newX.round(),
+      y: newY.round(),
+    );
+    if (!ok) {
+      _message = 'O sistema operacional recusou mover esse monitor — no'
+          ' macOS isso exige o App Sandbox desligado (ver'
+          ' macos/Runner/*.entitlements).';
+      return false;
+    }
+
+    _refreshLocalBoxesFromOs();
+    return true;
+  }
+
+  /// Depois de mover um monitor de verdade, relê os monitores reais do SO
+  /// (fonte da verdade) em vez de confiar na nossa própria conta — atualiza
+  /// os `_ScreenBox` locais EXISTENTES no lugar (não recria a lista, pra
+  /// não invalidar as referências que `_connections` já guarda).
+  void _refreshLocalBoxesFromOs() {
+    final fresh = widget.displayProvider();
+    for (final display in fresh) {
+      for (final box in _localBoxes) {
+        if (box.displayId == display.displayId) {
+          box.position = Offset(display.x, display.y);
+          box.size = Size(display.width, display.height);
+        }
+      }
+    }
   }
 
   void _replaceConnection(

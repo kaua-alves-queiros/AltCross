@@ -53,6 +53,36 @@ static void test_query_screens_matches_local_enumeration(void) {
     }
 }
 
+/* enumerate_ex existe só pra dar um id estável a cada monitor (necessário
+ * pra altcross_displays_set_origin saber QUAL reposicionar) — não testamos
+ * set_origin aqui (mexe de verdade na configuração de tela do sistema que
+ * está rodando o teste), mas o enumerate_ex em si é só leitura, seguro de
+ * chamar automaticamente, e tem que bater exatamente com o enumerate
+ * "normal" em geometria/contagem. */
+static void test_enumerate_ex_matches_enumerate_and_has_valid_ids(void) {
+    altcross_display_t plain[ALTCROSS_MAX_DISPLAYS];
+    int plain_count = altcross_displays_enumerate(plain, ALTCROSS_MAX_DISPLAYS);
+
+    altcross_display_ex_t ex[ALTCROSS_MAX_DISPLAYS];
+    int ex_count = altcross_displays_enumerate_ex(ex, ALTCROSS_MAX_DISPLAYS);
+
+    ASSERT_EQ(plain_count, ex_count);
+    ASSERT_TRUE(ex_count >= 1);
+    for (int i = 0; i < ex_count && i < plain_count; i++) {
+        ASSERT_EQ((int)plain[i].x, (int)ex[i].x);
+        ASSERT_EQ((int)plain[i].y, (int)ex[i].y);
+        ASSERT_EQ((int)plain[i].width, (int)ex[i].width);
+        ASSERT_EQ((int)plain[i].height, (int)ex[i].height);
+        ASSERT_EQ(plain[i].is_primary != 0, ex[i].is_primary != 0);
+    }
+    /* ids diferentes entre si — cada monitor tem que ser identificável */
+    for (int i = 0; i < ex_count; i++) {
+        for (int j = i + 1; j < ex_count; j++) {
+            ASSERT_TRUE(ex[i].display_id != ex[j].display_id);
+        }
+    }
+}
+
 static void test_query_screens_times_out_without_responder(void) {
     altcross_display_t out[ALTCROSS_MAX_DISPLAYS];
     int rc = altcross_screen_sync_query_screens("127.0.0.1", 300, out,
@@ -84,6 +114,7 @@ static void test_zone_push_delivers_sender_info(void) {
 void run_screen_sync_protocol_tests(void) {
     RUN_TEST(test_poll_returns_zero_when_nothing_pending);
     RUN_TEST(test_query_screens_matches_local_enumeration);
+    RUN_TEST(test_enumerate_ex_matches_enumerate_and_has_valid_ids);
     RUN_TEST(test_query_screens_times_out_without_responder);
     RUN_TEST(test_zone_push_delivers_sender_info);
 }

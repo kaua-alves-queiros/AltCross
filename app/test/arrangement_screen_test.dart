@@ -12,14 +12,16 @@ const _fakeDisplays = [
 Future<void> pumpScreen(
   WidgetTester tester,
   HotZoneConfigStore store, {
+  List<PhysicalDisplay>? displays,
   LookupTrustedHost? lookupHost,
   QueryPeerScreens? queryPeerScreens,
   PushZoneToPeer? pushZoneToPeer,
+  SetLocalDisplayOrigin? setLocalDisplayOrigin,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: ArrangementScreen(
       store: store,
-      displayProvider: () => _fakeDisplays,
+      displayProvider: () => displays ?? _fakeDisplays,
       // sem override, um dispositivo configurado tentaria carregar o FFI de
       // verdade (não disponível no ambiente de teste) — por padrão nenhum
       // teste aqui depende de pareamento de verdade, então nunca acha host.
@@ -28,6 +30,11 @@ Future<void> pumpScreen(
       pushZoneToPeer: pushZoneToPeer ??
           ({required peerHost, required myName, required myEdge, required targetScreenIndex}) =>
               true,
+      // sem override, mexeria no monitor de verdade da máquina rodando o
+      // teste — nenhum teste aqui deveria depender disso sem dizer
+      // explicitamente que espera essa chamada.
+      setLocalDisplayOrigin: setLocalDisplayOrigin ??
+          ({required displayId, required x, required y}) => false,
     ),
   ));
 }
@@ -117,6 +124,71 @@ void main() {
     expect(store.zones, isEmpty);
     expect(find.textContaining('não dois dispositivos remotos'),
         findsOneWidget);
+  });
+
+  testWidgets(
+      'conectar 2 telas locais move o monitor de verdade no SO, não só visualmente',
+      (tester) async {
+    const displays = [
+      PhysicalDisplay(
+          x: 0, y: 0, width: 1920, height: 1080, isPrimary: true, displayId: 1),
+      PhysicalDisplay(
+          x: 3000, y: 500, width: 1470, height: 956, isPrimary: false, displayId: 2),
+    ];
+    final calls = <Map<String, int>>[];
+
+    await pumpScreen(
+      tester,
+      HotZoneConfigStore(),
+      displays: displays,
+      setLocalDisplayOrigin: ({required displayId, required x, required y}) {
+        calls.add({'displayId': displayId, 'x': x, 'y': y});
+        return true;
+      },
+    );
+
+    // borda direita da principal (1920x1080, id 1) com a borda esquerda da
+    // segunda (1470x956, id 2) — a segunda tem que encostar exatamente no
+    // x=1920 (borda direita da principal), sem gap nenhum.
+    await tester.tap(find.byKey(
+        const Key('local-box-1920×1080\nprincipal-edge-right')));
+    await tester.pump();
+    await tester.tap(
+        find.byKey(const Key('local-box-1470×956-edge-left')));
+    await tester.pumpAndSettle();
+
+    expect(calls, hasLength(1));
+    expect(calls.single['displayId'], 2);
+    expect(calls.single['x'], 1920);
+    expect(calls.single['y'], 500); // eixo perpendicular mantém a posição atual
+  });
+
+  testWidgets(
+      'quando o SO recusa mover o monitor, não finge que conectou',
+      (tester) async {
+    const displays = [
+      PhysicalDisplay(
+          x: 0, y: 0, width: 1920, height: 1080, isPrimary: true, displayId: 1),
+      PhysicalDisplay(
+          x: 3000, y: 500, width: 1470, height: 956, isPrimary: false, displayId: 2),
+    ];
+
+    await pumpScreen(
+      tester,
+      HotZoneConfigStore(),
+      displays: displays,
+      setLocalDisplayOrigin: ({required displayId, required x, required y}) =>
+          false,
+    );
+
+    await tester.tap(find.byKey(
+        const Key('local-box-1920×1080\nprincipal-edge-right')));
+    await tester.pump();
+    await tester.tap(
+        find.byKey(const Key('local-box-1470×956-edge-left')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('recusou mover'), findsOneWidget);
   });
 
   testWidgets(
