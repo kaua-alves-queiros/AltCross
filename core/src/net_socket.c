@@ -104,17 +104,21 @@ int altcross_socket_send_to(altcross_socket_t *sock, const char *host,
     return (int)sent;
 }
 
-int altcross_socket_receive(altcross_socket_t *sock, uint8_t *buf,
-                             size_t buf_size, int timeout_ms) {
+static int wait_readable(altcross_raw_socket_t fd, int timeout_ms) {
     fd_set read_fds;
     FD_ZERO(&read_fds);
-    FD_SET(sock->fd, &read_fds);
+    FD_SET(fd, &read_fds);
 
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
 
-    int ready = select((int)(sock->fd + 1), &read_fds, NULL, NULL, &tv);
+    return select((int)(fd + 1), &read_fds, NULL, NULL, &tv);
+}
+
+int altcross_socket_receive(altcross_socket_t *sock, uint8_t *buf,
+                             size_t buf_size, int timeout_ms) {
+    int ready = wait_readable(sock->fd, timeout_ms);
     if (ready == 0) {
         return ALTCROSS_SOCKET_TIMEOUT;
     }
@@ -128,6 +132,44 @@ int altcross_socket_receive(altcross_socket_t *sock, uint8_t *buf,
         return ALTCROSS_SOCKET_ERROR;
     }
     return (int)received;
+}
+
+int altcross_socket_receive_from(altcross_socket_t *sock, uint8_t *buf,
+                                  size_t buf_size, int timeout_ms,
+                                  char *out_host, size_t out_host_size,
+                                  int *out_port) {
+    int ready = wait_readable(sock->fd, timeout_ms);
+    if (ready == 0) {
+        return ALTCROSS_SOCKET_TIMEOUT;
+    }
+    if (ready < 0) {
+        return ALTCROSS_SOCKET_ERROR;
+    }
+
+    struct sockaddr_in from_addr;
+    socklen_t from_len = sizeof(from_addr);
+    long received = recvfrom(sock->fd, (char *)buf, (int)buf_size, 0,
+                              (struct sockaddr *)&from_addr, &from_len);
+    if (received < 0) {
+        return ALTCROSS_SOCKET_ERROR;
+    }
+
+    if (out_host && out_host_size > 0) {
+        if (!inet_ntop(AF_INET, &from_addr.sin_addr, out_host,
+                        (socklen_t)out_host_size)) {
+            out_host[0] = '\0';
+        }
+    }
+    if (out_port) {
+        *out_port = ntohs(from_addr.sin_port);
+    }
+    return (int)received;
+}
+
+int altcross_socket_enable_broadcast(altcross_socket_t *sock) {
+    int enable = 1;
+    return setsockopt(sock->fd, SOL_SOCKET, SO_BROADCAST,
+                       (const char *)&enable, sizeof(enable));
 }
 
 void altcross_socket_close(altcross_socket_t *sock) {

@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "altcross/net_socket.h"
+
 static const char MAGIC[4] = {'A', 'L', 'T', 'X'};
 #define HEADER_SIZE 6 /* magic(4) + versão(1) + tipo(1) */
 
@@ -110,4 +112,77 @@ int altcross_discovery_decode(const uint8_t *buf, size_t len,
     }
 
     return 0;
+}
+
+int altcross_discovery_run_query(const char *from_device_id, int timeout_ms,
+                                  char *out_device_ids, char *out_names,
+                                  int *out_ports, char *out_hosts,
+                                  int max_count) {
+    altcross_socket_t *sock = altcross_socket_open_udp(0);
+    if (!sock) {
+        return -1;
+    }
+    if (altcross_socket_enable_broadcast(sock) != 0) {
+        altcross_socket_close(sock);
+        return -1;
+    }
+
+    uint8_t query_buf[ALTCROSS_DISCOVERY_MAX_SIZE];
+    int query_len =
+        altcross_discovery_encode_query(from_device_id, query_buf,
+                                         sizeof(query_buf));
+    if (query_len < 0) {
+        altcross_socket_close(sock);
+        return -1;
+    }
+    altcross_socket_send_to(sock, ALTCROSS_DISCOVERY_BROADCAST_ADDRESS,
+                             ALTCROSS_DISCOVERY_PORT, query_buf,
+                             (size_t)query_len);
+
+    int found = 0;
+    int elapsed_ms = 0;
+    const int step_ms = 200;
+    while (elapsed_ms < timeout_ms) {
+        uint8_t buf[ALTCROSS_DISCOVERY_MAX_SIZE];
+        char from_host[ALTCROSS_DISCOVERY_HOST_SIZE];
+        int from_port;
+        int n = altcross_socket_receive_from(sock, buf, sizeof(buf), step_ms,
+                                              from_host, sizeof(from_host),
+                                              &from_port);
+        elapsed_ms += step_ms;
+        if (n == ALTCROSS_SOCKET_TIMEOUT) {
+            continue;
+        }
+        if (n < 0) {
+            break;
+        }
+
+        altcross_discovery_msg_type_t type;
+        char query_from[ALTCROSS_DEVICE_ID_SIZE];
+        altcross_discovery_reply_t reply;
+        if (!altcross_discovery_decode(buf, (size_t)n, &type, query_from,
+                                        &reply)) {
+            continue;
+        }
+        if (type != ALTCROSS_DISCOVERY_MSG_REPLY) {
+            continue; /* ignora nosso próprio QUERY ecoado pelo broadcast */
+        }
+        if (strcmp(reply.device_id, from_device_id) == 0) {
+            continue;
+        }
+
+        if (found < max_count) {
+            memcpy(out_device_ids + (size_t)found * ALTCROSS_DEVICE_ID_SIZE,
+                   reply.device_id, ALTCROSS_DEVICE_ID_SIZE);
+            memcpy(out_names + (size_t)found * ALTCROSS_DEVICE_NAME_SIZE,
+                   reply.name, ALTCROSS_DEVICE_NAME_SIZE);
+            out_ports[found] = reply.port;
+            snprintf(out_hosts + (size_t)found * ALTCROSS_DISCOVERY_HOST_SIZE,
+                     ALTCROSS_DISCOVERY_HOST_SIZE, "%s", from_host);
+        }
+        found++;
+    }
+
+    altcross_socket_close(sock);
+    return found;
 }
