@@ -115,6 +115,42 @@ void main() {
       final store = HotZoneConfigStore();
       expect(store.resolve(HotZoneEdge.none), isNull);
     });
+
+    test('onChanged é chamado com a lista atualizada após add/remove/setEnabled',
+        () {
+      final store = HotZoneConfigStore();
+      final snapshots = <List<HotZoneConfig>>[];
+      store.onChanged = snapshots.add;
+
+      store.add(const HotZoneConfig(
+        edge: HotZoneEdge.right,
+        targetDeviceId: 'pc-2',
+        enabled: true,
+      ));
+      store.setEnabled('pc-2', false);
+      store.remove('pc-2');
+
+      expect(snapshots, hasLength(3));
+      expect(snapshots[0].single.targetDeviceId, 'pc-2');
+      expect(snapshots[1].single.enabled, isFalse);
+      expect(snapshots[2], isEmpty);
+    });
+
+    test('onChanged não é chamado quando add() falha', () {
+      final store = HotZoneConfigStore();
+      var calls = 0;
+      store.onChanged = (_) => calls++;
+
+      expect(
+        () => store.add(const HotZoneConfig(
+          edge: HotZoneEdge.none,
+          targetDeviceId: 'pc-2',
+          enabled: true,
+        )),
+        throwsArgumentError,
+      );
+      expect(calls, 0);
+    });
   });
 
   group('HotZoneConfig json', () {
