@@ -11,6 +11,10 @@ void run_pairing_protocol_tests(void);
 void run_screen_sync_protocol_tests(void);
 void run_discovery_tests(void);
 void run_platform_input_tests(void);
+void run_sha256_tests(void);
+void run_hmac_sha256_tests(void);
+void run_handoff_protocol_tests(void);
+void run_connection_monitor_tests(void);
 
 int main(void) {
     run_hotzone_tests();
@@ -22,6 +26,10 @@ int main(void) {
     run_screen_sync_protocol_tests();
     run_discovery_tests();
     run_platform_input_tests();
+    run_sha256_tests();
+    run_hmac_sha256_tests();
+    run_handoff_protocol_tests();
+    run_connection_monitor_tests();
 
     printf("\n%d tests, %d failures\n", altcross_test_count,
            altcross_test_failures);

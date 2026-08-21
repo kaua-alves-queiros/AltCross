@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/physical_display.dart';
+import '../native/altcross_native.dart';
 import '../services/settings_store.dart';
 import '../state/hot_zone_config_store.dart';
 import '../state/local_hotzone_store.dart';
@@ -19,6 +20,12 @@ class HomeScreen extends StatelessWidget {
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
   final PollPairingCompleted? pollPairingCompleted;
+  final LookupTrustedHost? lookupHost;
+  final QueryPeerScreens? queryPeerScreens;
+  final StartHandoff? startHandoff;
+  final StopHandoff? stopHandoff;
+  final IsHandoffRemote? isHandoffRemote;
+  final IsHandoffRemote? isHandoffActive;
   final AppThemePreference currentThemePreference;
   final ValueChanged<AppThemePreference> onThemePreferenceChanged;
 
@@ -34,6 +41,12 @@ class HomeScreen extends StatelessWidget {
     this.confirmPairing,
     this.pollIncomingPairingRequest,
     this.pollPairingCompleted,
+    this.lookupHost,
+    this.queryPeerScreens,
+    this.startHandoff,
+    this.stopHandoff,
+    this.isHandoffRemote,
+    this.isHandoffActive,
   });
 
   @override
@@ -57,6 +70,8 @@ class HomeScreen extends StatelessWidget {
                   store: store,
                   localHotZoneStore: localHotZoneStore,
                   displayProvider: displayProvider,
+                  lookupHost: lookupHost,
+                  queryPeerScreens: queryPeerScreens,
                 ),
               )),
             ),
@@ -72,6 +87,13 @@ class HomeScreen extends StatelessWidget {
                   confirmPairing: confirmPairing,
                   pollIncomingPairingRequest: pollIncomingPairingRequest,
                   pollPairingCompleted: pollPairingCompleted,
+                  lookupHost: lookupHost,
+                  queryPeerScreens: queryPeerScreens,
+                  localDisplaysProvider: displayProvider,
+                  startHandoff: startHandoff,
+                  stopHandoff: stopHandoff,
+                  isHandoffRemote: isHandoffRemote,
+                  isHandoffActive: isHandoffActive,
                 ),
               )),
             ),

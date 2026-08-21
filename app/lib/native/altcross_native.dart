@@ -7,10 +7,20 @@ import 'dart:ui';
 import 'package:ffi/ffi.dart';
 
 import '../models/discovered_device.dart';
+import '../models/handoff_zone.dart';
 import '../models/hot_zone.dart';
 import '../models/pairing.dart';
 import '../models/physical_display.dart';
 import '../models/screen_sync.dart';
+
+/// Compartilhados entre `ArrangementScreen` e `ConnectionsScreen` (as duas
+/// precisam perguntar host/telas reais de um dispositivo pareado) — moram
+/// aqui, junto da implementação canônica, pra não duplicar a declaração em
+/// cada tela (o que colidiria: 2 telas importadas juntas em home_screen.dart
+/// com typedefs de mesmo nome é erro de import ambíguo).
+typedef LookupTrustedHost = String? Function(String deviceId);
+typedef QueryPeerScreens = Future<List<PhysicalDisplay>> Function(
+    String peerHost);
 
 /// Espelha `altcross_display_t` de core/include/altcross/displays.h — os
 /// campos e a ordem têm que bater exatamente com o struct em C.
@@ -59,6 +69,52 @@ typedef _GetCursorPositionDart = int Function(
 
 typedef _WarpCursorNative = Int32 Function(Int32 x, Int32 y);
 typedef _WarpCursorDart = int Function(int x, int y);
+
+/// Espelha `altcross_screen_config_t` de core/include/altcross/hotzone.h.
+final class _NativeScreenConfig extends Struct {
+  @Int32()
+  external int screenWidth;
+  @Int32()
+  external int screenHeight;
+  @Int32()
+  external int cornerSize;
+}
+
+/// Espelha `altcross_handoff_zone_t` de core/include/altcross/handoff.h.
+final class _NativeHandoffZone extends Struct {
+  @Int32()
+  external int edge;
+  @Array(33)
+  external Array<Uint8> targetDeviceId;
+  @Int32()
+  external int targetScreenWidth;
+  @Int32()
+  external int targetScreenHeight;
+  @Int32()
+  external int targetCornerSize;
+}
+
+typedef _HandoffStartNative = Int32 Function(
+    Pointer<_NativeScreenConfig> localScreen,
+    Pointer<_NativeHandoffZone> zones,
+    Int32 zoneCount,
+    Pointer<Utf8> myDeviceId,
+    Pointer<Utf8> storePath);
+typedef _HandoffStartDart = int Function(
+    Pointer<_NativeScreenConfig> localScreen,
+    Pointer<_NativeHandoffZone> zones,
+    int zoneCount,
+    Pointer<Utf8> myDeviceId,
+    Pointer<Utf8> storePath);
+
+typedef _HandoffStopNative = Void Function();
+typedef _HandoffStopDart = void Function();
+
+typedef _HandoffIsRemoteNative = Int32 Function();
+typedef _HandoffIsRemoteDart = int Function();
+
+typedef _HandoffIsActiveNative = Int32 Function();
+typedef _HandoffIsActiveDart = int Function();
 
 typedef _LoadIdentityNative = Int32 Function(
     Pointer<Utf8> path, Pointer<Uint8> outDeviceId);
@@ -314,6 +370,88 @@ class AltCrossNative {
             'altcross_platform_warp_cursor')
         .asFunction<_WarpCursorDart>();
     return warp(x, y) == 0;
+  }
+
+  static const int _handoffCornerSize = 20;
+
+  /// Liga o handoff de verdade — a partir daqui, o mouse/teclado real desta
+  /// máquina passa a poder ser capturado e mandado autenticado (ver
+  /// handoff_protocol.h) pro dispositivo remoto quando o cursor cruzar uma
+  /// das bordas em `zones`. `localScreenWidth/Height` deve ser o retângulo
+  /// combinado de TODAS as telas locais (mesma conta de `_localBounds` na
+  /// tela de Arranjo). Instala um hook global de verdade — só chamar a
+  /// partir de uma ação explícita do usuário, com aviso antes (ver
+  /// AGENTS.md). Retorna true se conseguiu subir (no macOS, false
+  /// tipicamente significa falta de permissão de Acessibilidade).
+  static bool startHandoff({
+    required double localScreenWidth,
+    required double localScreenHeight,
+    required List<HandoffZoneSpec> zones,
+  }) {
+    final start = _library()
+        .lookup<NativeFunction<_HandoffStartNative>>('altcross_handoff_start')
+        .asFunction<_HandoffStartDart>();
+
+    final localScreen = calloc<_NativeScreenConfig>();
+    localScreen.ref.screenWidth = localScreenWidth.round();
+    localScreen.ref.screenHeight = localScreenHeight.round();
+    localScreen.ref.cornerSize = _handoffCornerSize;
+
+    final zonesNative = calloc<_NativeHandoffZone>(zones.length);
+    for (var i = 0; i < zones.length; i++) {
+      final zone = zones[i];
+      zonesNative[i].edge = zone.edge.index;
+      final idBytes = utf8.encode(zone.targetDeviceId);
+      for (var b = 0; b < 33; b++) {
+        zonesNative[i].targetDeviceId[b] = b < idBytes.length ? idBytes[b] : 0;
+      }
+      zonesNative[i].targetScreenWidth = zone.targetScreenWidth.round();
+      zonesNative[i].targetScreenHeight = zone.targetScreenHeight.round();
+      zonesNative[i].targetCornerSize = _handoffCornerSize;
+    }
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final storePathNative = _pairingStorePath().toNativeUtf8();
+    try {
+      final rc = start(localScreen, zonesNative, zones.length, deviceIdNative,
+          storePathNative);
+      return rc == 0;
+    } finally {
+      calloc.free(localScreen);
+      calloc.free(zonesNative);
+      calloc.free(deviceIdNative);
+      calloc.free(storePathNative);
+    }
+  }
+
+  /// Desliga o handoff — tira o hook global e volta o controle pro local se
+  /// estava remoto.
+  static void stopHandoff() {
+    final stop = _library()
+        .lookup<NativeFunction<_HandoffStopNative>>('altcross_handoff_stop')
+        .asFunction<_HandoffStopDart>();
+    stop();
+  }
+
+  /// true se o controle está AGORA em outro dispositivo (mouse/teclado
+  /// capturados e sendo roteados) — pra UI mostrar um indicador de estado.
+  static bool isHandoffRemote() {
+    final isRemote = _library()
+        .lookup<NativeFunction<_HandoffIsRemoteNative>>(
+            'altcross_handoff_is_remote')
+        .asFunction<_HandoffIsRemoteDart>();
+    return isRemote() != 0;
+  }
+
+  /// true se o handoff foi ligado (start chamado com sucesso) e ainda não
+  /// foi desligado — sobrevive à tela de Conexões sendo fechada/reaberta,
+  /// diferente do estado local do widget.
+  static bool isHandoffActive() {
+    final isActive = _library()
+        .lookup<NativeFunction<_HandoffIsActiveNative>>(
+            'altcross_handoff_is_active')
+        .asFunction<_HandoffIsActiveDart>();
+    return isActive() != 0;
   }
 
   static String _identityFilePath() {
@@ -788,4 +926,76 @@ class AltCrossNative {
       calloc.free(outPort);
     }
   }
+
+  // ── Connection Monitor ──────────────────────────────────────────────
+
+  static bool _monitorRunning = false;
+
+  /// Inicia o monitor de heartbeat em background. Quando a connectividade
+  /// com um peer pareado muda, chama [onStatusChange].
+  static void startConnectionMonitor({
+    required void Function(String deviceId, bool online) onStatusChange,
+  }) {
+    if (_monitorRunning) return;
+
+    final start = _library()
+        .lookup<NativeFunction<_StartConnectionMonitorNative>>(
+            'altcross_connection_monitor_start')
+        .asFunction<_StartConnectionMonitorDart>();
+
+    final storePath = _pairingStorePath().toNativeUtf8();
+    try {
+      final rc = start(storePath, onStatusChange);
+      if (rc == 0) {
+        _monitorRunning = true;
+      }
+    } finally {
+      calloc.free(storePath);
+    }
+  }
+
+  /// Para o monitor de heartbeat.
+  static void stopConnectionMonitor() {
+    if (!_monitorRunning) return;
+
+    final stop = _library()
+        .lookup<NativeFunction<_StopConnectionMonitorNative>>(
+            'altcross_connection_monitor_stop')
+        .asFunction<_StopConnectionMonitorDart>();
+
+    stop();
+    _monitorRunning = false;
+  }
+
+  /// Retorna o status online/offline de um peer específico.
+  /// 1 = online, 0 = offline, -1 = não encontrado ou monitor parado.
+  static int isPeerOnline(String deviceId) {
+    final fn = _library()
+        .lookup<NativeFunction<_IsPeerOnlineNative>>(
+            'altcross_connection_monitor_is_peer_online')
+        .asFunction<_IsPeerOnlineDart>();
+
+    final idNative = deviceId.toNativeUtf8();
+    try {
+      return fn(idNative);
+    } finally {
+      calloc.free(idNative);
+    }
+  }
 }
+
+// ── Connection Monitor typedefs ─────────────────────────────────────
+
+typedef _StatusCallbackNative = Void Function(Utf8 device_id, Int32 online);
+typedef _StatusCallbackDart = void Function(String device_id, int online);
+
+typedef _StartConnectionMonitorNative = Int32 Function(
+    Utf8 store_path, _StatusCallbackNative callback);
+typedef _StartConnectionMonitorDart = int Function(
+    String storePath, _StatusCallbackDart callback);
+
+typedef _StopConnectionMonitorNative = Void Function();
+typedef _StopConnectionMonitorDart = void Function();
+
+typedef _IsPeerOnlineNative = Int32 Function(Utf8 device_id);
+typedef _IsPeerOnlineDart = int Function(String deviceId);

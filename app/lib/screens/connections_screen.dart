@@ -4,11 +4,33 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/discovered_device.dart';
+import '../models/handoff_zone.dart';
 import '../models/hot_zone.dart';
 import '../models/pairing.dart';
+import '../models/physical_display.dart';
 import '../native/altcross_native.dart';
 import '../services/hot_zone_labels.dart';
 import '../state/hot_zone_config_store.dart';
+
+typedef LocalDisplaysProvider = List<PhysicalDisplay> Function();
+typedef StartHandoff = bool Function({
+  required double localScreenWidth,
+  required double localScreenHeight,
+  required List<HandoffZoneSpec> zones,
+});
+typedef StopHandoff = void Function();
+typedef IsHandoffRemote = bool Function();
+
+bool _defaultStartHandoff({
+  required double localScreenWidth,
+  required double localScreenHeight,
+  required List<HandoffZoneSpec> zones,
+}) =>
+    AltCrossNative.startHandoff(
+      localScreenWidth: localScreenWidth,
+      localScreenHeight: localScreenHeight,
+      zones: zones,
+    );
 
 typedef DiscoveryRunner = Future<List<DiscoveredDevice>> Function({
   int timeoutMs,
@@ -41,8 +63,15 @@ class ConnectionsScreen extends StatefulWidget {
   final ConfirmPairing confirmPairing;
   final PollIncomingPairingRequest pollIncomingPairingRequest;
   final PollPairingCompleted pollPairingCompleted;
+  final LookupTrustedHost lookupHost;
+  final QueryPeerScreens queryPeerScreens;
+  final LocalDisplaysProvider localDisplaysProvider;
+  final StartHandoff startHandoff;
+  final StopHandoff stopHandoff;
+  final IsHandoffRemote isHandoffRemote;
+  final IsHandoffRemote isHandoffActive;
 
-  const ConnectionsScreen({
+  ConnectionsScreen({
     super.key,
     required this.store,
     DiscoveryRunner? discoveryRunner,
@@ -50,6 +79,13 @@ class ConnectionsScreen extends StatefulWidget {
     ConfirmPairing? confirmPairing,
     PollIncomingPairingRequest? pollIncomingPairingRequest,
     PollPairingCompleted? pollPairingCompleted,
+    LookupTrustedHost? lookupHost,
+    QueryPeerScreens? queryPeerScreens,
+    LocalDisplaysProvider? localDisplaysProvider,
+    StartHandoff? startHandoff,
+    StopHandoff? stopHandoff,
+    IsHandoffRemote? isHandoffRemote,
+    IsHandoffRemote? isHandoffActive,
   })  : discoveryRunner = discoveryRunner ?? AltCrossNative.runDiscovery,
         sendPairingRequest =
             sendPairingRequest ?? AltCrossNative.sendPairingRequest,
@@ -57,7 +93,16 @@ class ConnectionsScreen extends StatefulWidget {
         pollIncomingPairingRequest = pollIncomingPairingRequest ??
             AltCrossNative.pollIncomingPairingRequest,
         pollPairingCompleted =
-            pollPairingCompleted ?? AltCrossNative.pollPairingCompleted;
+            pollPairingCompleted ?? AltCrossNative.pollPairingCompleted,
+        lookupHost = lookupHost ?? AltCrossNative.lookupTrustedHost,
+        queryPeerScreens = queryPeerScreens ??
+            ((host) => AltCrossNative.queryPeerScreens(peerHost: host)),
+        localDisplaysProvider =
+            localDisplaysProvider ?? AltCrossNative.enumerateDisplays,
+        startHandoff = startHandoff ?? _defaultStartHandoff,
+        stopHandoff = stopHandoff ?? AltCrossNative.stopHandoff,
+        isHandoffRemote = isHandoffRemote ?? AltCrossNative.isHandoffRemote,
+        isHandoffActive = isHandoffActive ?? AltCrossNative.isHandoffActive;
 
   @override
   State<ConnectionsScreen> createState() => _ConnectionsScreenState();
@@ -75,12 +120,21 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
   bool _showingIncomingDialog = false;
   String? _awaitingConfirmDeviceId;
 
+  bool _handoffActive = false;
+  bool _handoffRemoteNow = false;
+  bool _startingHandoff = false;
+
   @override
   void initState() {
     super.initState();
+    // O handoff pode já estar rodando de uma visita anterior a esta tela
+    // (ele sobrevive à navegação) — sem isso, reabrir a tela mostraria
+    // "desativado" mesmo com o hook de verdade ainda ligado.
+    _handoffActive = widget.isHandoffActive();
     _incomingPollTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
       _pollIncoming();
       _pollCompleted();
+      _pollHandoffState();
     });
   }
 
@@ -88,6 +142,16 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
   void dispose() {
     _incomingPollTimer?.cancel();
     super.dispose();
+  }
+
+  void _pollHandoffState() {
+    if (!_handoffActive || !mounted) {
+      return;
+    }
+    final remoteNow = widget.isHandoffRemote();
+    if (remoteNow != _handoffRemoteNow) {
+      setState(() => _handoffRemoteNow = remoteNow);
+    }
   }
 
   void _pollIncoming() {
@@ -220,6 +284,121 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     }
   }
 
+  Future<void> _confirmAndActivateHandoff() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ativar controle entre dispositivos'),
+        content: const Text(
+          'A partir de agora, seu mouse e teclado de verdade passam a poder '
+          'ser capturados e mandados pra outro dispositivo quando o cursor '
+          'cruzar uma borda configurada.\n\n'
+          'Ctrl+Esc solta o controle de volta a qualquer momento.\n\n'
+          'No macOS isso pede permissão de Acessibilidade na primeira vez.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            key: const Key('confirm-activate-handoff-button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Ativar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _activateHandoff();
+  }
+
+  /// Monta as bordas de verdade (com a tela REAL de cada alvo, buscada pela
+  /// rede — nunca um tamanho chutado) e liga o handoff. Bordas cujo
+  /// dispositivo nunca foi pareado ou está offline agora são puladas (com
+  /// aviso), não travam a ativação das outras.
+  Future<void> _activateHandoff() async {
+    setState(() => _startingHandoff = true);
+
+    final enabledZones = widget.store.zones.where((z) => z.enabled).toList();
+    final zoneSpecs = <HandoffZoneSpec>[];
+    final skipped = <String>[];
+
+    for (final zone in enabledZones) {
+      final host = widget.lookupHost(zone.targetDeviceId);
+      if (host == null) {
+        skipped.add(zone.targetDeviceId);
+        continue;
+      }
+      final displays = await widget.queryPeerScreens(host);
+      if (displays.isEmpty) {
+        skipped.add(zone.targetDeviceId);
+        continue;
+      }
+      var bounds = displays.first.rect;
+      for (final d in displays.skip(1)) {
+        bounds = bounds.expandToInclude(d.rect);
+      }
+      zoneSpecs.add(HandoffZoneSpec(
+        edge: zone.edge,
+        targetDeviceId: zone.targetDeviceId,
+        targetScreenWidth: bounds.width,
+        targetScreenHeight: bounds.height,
+      ));
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (zoneSpecs.isEmpty) {
+      setState(() {
+        _startingHandoff = false;
+        _message = enabledZones.isEmpty
+            ? 'Nenhuma borda configurada — configure conexões no Arranjo primeiro.'
+            : 'Nenhum dos dispositivos configurados está pareado e online agora.';
+      });
+      return;
+    }
+
+    final localDisplays = widget.localDisplaysProvider();
+    var localBounds = localDisplays.first.rect;
+    for (final d in localDisplays.skip(1)) {
+      localBounds = localBounds.expandToInclude(d.rect);
+    }
+
+    final ok = widget.startHandoff(
+      localScreenWidth: localBounds.width,
+      localScreenHeight: localBounds.height,
+      zones: zoneSpecs,
+    );
+
+    setState(() {
+      _startingHandoff = false;
+      _handoffActive = ok;
+      _handoffRemoteNow = false;
+      if (!ok) {
+        _message = 'Não consegui ativar — no macOS, confira Ajustes > '
+            'Privacidade e Segurança > Acessibilidade.';
+      } else if (skipped.isNotEmpty) {
+        _message = 'Ativado (menos pra: ${skipped.join(", ")} — offline agora).';
+      } else {
+        _message = 'Controle entre dispositivos ativado.';
+      }
+    });
+  }
+
+  void _deactivateHandoff() {
+    widget.stopHandoff();
+    setState(() {
+      _handoffActive = false;
+      _handoffRemoteNow = false;
+      _message = 'Controle entre dispositivos desativado.';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final zones = widget.store.zones;
@@ -244,6 +423,45 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
                       '${edgeLabel(zone.edge)} · ${zone.enabled ? "ativa" : "desativada"}'),
                 ),
               ),
+          const SizedBox(height: 24),
+          Card(
+            color: _handoffActive
+                ? Theme.of(context).colorScheme.primaryContainer
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Icon(_handoffRemoteNow
+                      ? Icons.swipe_right_alt
+                      : (_handoffActive ? Icons.link : Icons.link_off)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _handoffRemoteNow
+                          ? 'Controle está em outro dispositivo agora — Ctrl+Esc pra voltar.'
+                          : _handoffActive
+                              ? 'Controle entre dispositivos ativado.'
+                              : 'Controle entre dispositivos desativado.',
+                    ),
+                  ),
+                  if (_startingHandoff)
+                    const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                  else
+                    FilledButton(
+                      key: const Key('toggle-handoff-button'),
+                      onPressed: _handoffActive
+                          ? _deactivateHandoff
+                          : _confirmAndActivateHandoff,
+                      child: Text(_handoffActive ? 'Desativar' : 'Ativar'),
+                    ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 32),
           Row(
             children: [

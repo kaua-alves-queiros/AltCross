@@ -1,6 +1,9 @@
 import 'package:altcross_app/models/discovered_device.dart';
+import 'package:altcross_app/models/handoff_zone.dart';
 import 'package:altcross_app/models/hot_zone.dart';
 import 'package:altcross_app/models/pairing.dart';
+import 'package:altcross_app/models/physical_display.dart';
+import 'package:altcross_app/native/altcross_native.dart';
 import 'package:altcross_app/screens/connections_screen.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +16,10 @@ const _device = DiscoveredDevice(
   port: 45100,
 );
 
+const _fakeLocalDisplays = [
+  PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
+];
+
 Future<void> pumpScreen(
   WidgetTester tester,
   HotZoneConfigStore store, {
@@ -21,6 +28,12 @@ Future<void> pumpScreen(
   ConfirmPairing? confirmPairing,
   PollIncomingPairingRequest? pollIncomingPairingRequest,
   PollPairingCompleted? pollPairingCompleted,
+  LookupTrustedHost? lookupHost,
+  QueryPeerScreens? queryPeerScreens,
+  StartHandoff? startHandoff,
+  StopHandoff? stopHandoff,
+  IsHandoffRemote? isHandoffRemote,
+  IsHandoffRemote? isHandoffActive,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: ConnectionsScreen(
@@ -38,6 +51,18 @@ Future<void> pumpScreen(
       pollIncomingPairingRequest:
           pollIncomingPairingRequest ?? () => null,
       pollPairingCompleted: pollPairingCompleted ?? () => null,
+      // idem pro handoff — sem override, ligaria o hook de captura de
+      // verdade nesta máquina; nenhum teste aqui deveria depender disso
+      // sem dizer explicitamente que espera essa chamada.
+      lookupHost: lookupHost ?? (_) => null,
+      queryPeerScreens: queryPeerScreens ?? (_) async => const [],
+      localDisplaysProvider: () => _fakeLocalDisplays,
+      startHandoff: startHandoff ??
+          ({required localScreenWidth, required localScreenHeight, required zones}) =>
+              false,
+      stopHandoff: stopHandoff ?? () {},
+      isHandoffRemote: isHandoffRemote ?? () => false,
+      isHandoffActive: isHandoffActive ?? () => false,
     ),
   ));
 }
@@ -265,5 +290,170 @@ void main() {
     expect(store.zones, hasLength(1));
     expect(store.zones.single.targetDeviceId, 'device-remote');
     expect(find.textContaining('Pareado com PC Remoto'), findsOneWidget);
+  });
+
+  group('handoff', () {
+    testWidgets('sem conexão configurada, ativar mostra aviso e não liga nada',
+        (tester) async {
+      var startCalls = 0;
+      await pumpScreen(
+        tester,
+        HotZoneConfigStore(),
+        startHandoff: ({
+          required localScreenWidth,
+          required localScreenHeight,
+          required zones,
+        }) {
+          startCalls++;
+          return true;
+        },
+      );
+
+      await tester.tap(find.byKey(const Key('toggle-handoff-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-activate-handoff-button')));
+      await tester.pumpAndSettle();
+
+      expect(startCalls, 0);
+      expect(find.textContaining('configure conexões no Arranjo'),
+          findsOneWidget);
+    });
+
+    testWidgets(
+        'ativar busca a tela real do alvo e liga o handoff com ela, não um tamanho chutado',
+        (tester) async {
+      final store = HotZoneConfigStore();
+      store.add(const HotZoneConfig(
+        edge: HotZoneEdge.right,
+        targetDeviceId: 'pc-windows',
+        enabled: true,
+      ));
+
+      Map<String, Object?>? started;
+      await pumpScreen(
+        tester,
+        store,
+        lookupHost: (deviceId) =>
+            deviceId == 'pc-windows' ? '192.168.0.42' : null,
+        queryPeerScreens: (peerHost) async {
+          expect(peerHost, '192.168.0.42');
+          return const [
+            PhysicalDisplay(
+                x: 0, y: 0, width: 3440, height: 1440, isPrimary: true),
+          ];
+        },
+        startHandoff: ({
+          required localScreenWidth,
+          required localScreenHeight,
+          required zones,
+        }) {
+          started = {
+            'localScreenWidth': localScreenWidth,
+            'localScreenHeight': localScreenHeight,
+            'zones': zones,
+          };
+          return true;
+        },
+      );
+
+      await tester.tap(find.byKey(const Key('toggle-handoff-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-activate-handoff-button')));
+      await tester.pumpAndSettle();
+
+      expect(started, isNotNull);
+      expect(started!['localScreenWidth'], 1920);
+      expect(started!['localScreenHeight'], 1080);
+      final zones = started!['zones'] as List<HandoffZoneSpec>;
+      expect(zones, hasLength(1));
+      expect(zones.single.targetDeviceId, 'pc-windows');
+      expect(zones.single.targetScreenWidth, 3440);
+      expect(zones.single.targetScreenHeight, 1440);
+      expect(find.textContaining('ativado'), findsWidgets);
+    });
+
+    testWidgets('dispositivo offline é pulado, mas outros ativam mesmo assim',
+        (tester) async {
+      final store = HotZoneConfigStore();
+      store.add(const HotZoneConfig(
+        edge: HotZoneEdge.right,
+        targetDeviceId: 'pc-offline',
+        enabled: true,
+      ));
+
+      await pumpScreen(
+        tester,
+        store,
+        lookupHost: (deviceId) => null, // nunca pareado / sem host conhecido
+        startHandoff: ({
+          required localScreenWidth,
+          required localScreenHeight,
+          required zones,
+        }) =>
+            true,
+      );
+
+      await tester.tap(find.byKey(const Key('toggle-handoff-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-activate-handoff-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Nenhum dos dispositivos configurados'),
+          findsOneWidget);
+    });
+
+    testWidgets('desativar chama stopHandoff e volta o botão pra Ativar',
+        (tester) async {
+      final store = HotZoneConfigStore();
+      store.add(const HotZoneConfig(
+        edge: HotZoneEdge.right,
+        targetDeviceId: 'pc-windows',
+        enabled: true,
+      ));
+      var stopped = false;
+
+      await pumpScreen(
+        tester,
+        store,
+        lookupHost: (_) => '192.168.0.42',
+        queryPeerScreens: (_) async => const [
+          PhysicalDisplay(
+              x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
+        ],
+        startHandoff: ({
+          required localScreenWidth,
+          required localScreenHeight,
+          required zones,
+        }) =>
+            true,
+        stopHandoff: () => stopped = true,
+      );
+
+      await tester.tap(find.byKey(const Key('toggle-handoff-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-activate-handoff-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Desativar'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('toggle-handoff-button')));
+      await tester.pumpAndSettle();
+
+      expect(stopped, isTrue);
+      expect(find.text('Ativar'), findsOneWidget);
+    });
+
+    testWidgets('reabrir a tela com handoff já ativo mostra o estado certo',
+        (tester) async {
+      await pumpScreen(
+        tester,
+        HotZoneConfigStore(),
+        isHandoffActive: () => true,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Desativar'), findsOneWidget);
+      expect(find.textContaining('ativado'), findsWidgets);
+    });
   });
 }
