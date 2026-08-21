@@ -50,4 +50,22 @@ ALTCROSS_API int altcross_socket_enable_broadcast(altcross_socket_t *sock);
 
 ALTCROSS_API void altcross_socket_close(altcross_socket_t *sock);
 
+#define ALTCROSS_MAX_NETWORK_INTERFACES 16
+#define ALTCROSS_BROADCAST_ADDRESS_SIZE 46 /* cabe um IPv4 em texto */
+
+/* Lista o endereço de broadcast dirigido (ex.: "192.168.1.255") de cada
+ * interface de rede IPv4 ativa e não-loopback desta máquina. Existe porque
+ * mandar só pra 255.255.255.255 depende de qual interface o SO escolhe pela
+ * tabela de rotas — numa máquina com várias interfaces (VPN, VirtualBox,
+ * Docker, Hyper-V, WSL etc.) isso pode escolher a errada e o broadcast nunca
+ * chegar na rede de verdade. Mandar pro endereço dirigido de cada interface
+ * garante que sai em todas.
+ *
+ * Preenche out (buffer contíguo, max_count posições de out_addr_size bytes
+ * cada). Retorna a quantidade de interfaces encontradas (pode ser maior que
+ * max_count; só as primeiras max_count são escritas). */
+ALTCROSS_API int altcross_net_list_broadcast_addresses(char *out,
+                                                        size_t out_addr_size,
+                                                        int max_count);
+
 #endif

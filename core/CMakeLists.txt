@@ -49,7 +49,7 @@ elseif(WIN32)
         src/platform/windows/platform_input.c
         src/platform/windows/displays.c
     )
-    list(APPEND ALTCROSS_PLATFORM_LIBS user32 ws2_32)
+    list(APPEND ALTCROSS_PLATFORM_LIBS user32 ws2_32 iphlpapi)
 else()
     list(APPEND ALTCROSS_PLATFORM_LIBS Threads::Threads)
 endif()

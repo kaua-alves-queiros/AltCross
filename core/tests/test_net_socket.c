@@ -74,10 +74,38 @@ static void test_enable_broadcast_succeeds(void) {
     altcross_socket_close(sock);
 }
 
+static void test_list_broadcast_addresses_finds_at_least_one_real_interface(
+    void) {
+    char addrs[ALTCROSS_MAX_NETWORK_INTERFACES][ALTCROSS_BROADCAST_ADDRESS_SIZE];
+    int count = altcross_net_list_broadcast_addresses(
+        (char *)addrs, ALTCROSS_BROADCAST_ADDRESS_SIZE,
+        ALTCROSS_MAX_NETWORK_INTERFACES);
+
+    /* toda máquina de dev tem pelo menos 1 interface ativa não-loopback
+     * (Wi-Fi/Ethernet); não travamos num IP específico pra não depender de
+     * qual máquina está rodando o teste. */
+    ASSERT_TRUE(count >= 1);
+
+    int shown = count < ALTCROSS_MAX_NETWORK_INTERFACES
+                    ? count
+                    : ALTCROSS_MAX_NETWORK_INTERFACES;
+    for (int i = 0; i < shown; i++) {
+        /* cada entrada deve parecer um IPv4 em texto (3 pontos) */
+        int dots = 0;
+        for (const char *p = addrs[i]; *p; p++) {
+            if (*p == '.') {
+                dots++;
+            }
+        }
+        ASSERT_EQ(3, dots);
+    }
+}
+
 void run_net_socket_tests(void) {
     RUN_TEST(test_open_assigns_a_local_port_when_zero_is_requested);
     RUN_TEST(test_send_and_receive_round_trip_over_loopback);
     RUN_TEST(test_receive_times_out_when_nothing_arrives);
     RUN_TEST(test_receive_from_reports_the_sender_address);
     RUN_TEST(test_enable_broadcast_succeeds);
+    RUN_TEST(test_list_broadcast_addresses_finds_at_least_one_real_interface);
 }

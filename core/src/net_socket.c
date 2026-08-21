@@ -1,16 +1,21 @@
 #include "altcross/net_socket.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 typedef SOCKET altcross_raw_socket_t;
 #define ALTCROSS_INVALID_SOCKET INVALID_SOCKET
 #else
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -171,6 +176,117 @@ int altcross_socket_enable_broadcast(altcross_socket_t *sock) {
     return setsockopt(sock->fd, SOL_SOCKET, SO_BROADCAST,
                        (const char *)&enable, sizeof(enable));
 }
+
+#if defined(_WIN32)
+int altcross_net_list_broadcast_addresses(char *out, size_t out_addr_size,
+                                           int max_count) {
+    ULONG buf_len = 15000;
+    PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES)malloc(buf_len);
+    if (!addresses) {
+        return 0;
+    }
+
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                  GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG ret =
+        GetAdaptersAddresses(AF_INET, flags, NULL, addresses, &buf_len);
+    if (ret == ERROR_BUFFER_OVERFLOW) {
+        free(addresses);
+        addresses = (PIP_ADAPTER_ADDRESSES)malloc(buf_len);
+        if (!addresses) {
+            return 0;
+        }
+        ret = GetAdaptersAddresses(AF_INET, flags, NULL, addresses, &buf_len);
+    }
+    if (ret != NO_ERROR) {
+        free(addresses);
+        return 0;
+    }
+
+    int count = 0;
+    for (PIP_ADAPTER_ADDRESSES adapter = addresses; adapter;
+         adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp) {
+            continue;
+        }
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+            continue;
+        }
+
+        for (PIP_ADAPTER_UNICAST_ADDRESS unicast =
+                 adapter->FirstUnicastAddress;
+             unicast; unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+
+            struct sockaddr_in *sin =
+                (struct sockaddr_in *)(void *)unicast->Address.lpSockaddr;
+            ULONG prefix_len = unicast->OnLinkPrefixLength;
+            uint32_t ip = ntohl(sin->sin_addr.s_addr);
+            uint32_t mask =
+                (prefix_len == 0) ? 0u : (0xFFFFFFFFu << (32 - prefix_len));
+            uint32_t broadcast = ip | ~mask;
+
+            struct in_addr broadcast_addr;
+            broadcast_addr.s_addr = htonl(broadcast);
+
+            char addr_str[ALTCROSS_BROADCAST_ADDRESS_SIZE];
+            if (!inet_ntop(AF_INET, &broadcast_addr, addr_str,
+                            sizeof(addr_str))) {
+                continue;
+            }
+
+            if (count < max_count) {
+                snprintf(out + (size_t)count * out_addr_size, out_addr_size,
+                         "%s", addr_str);
+            }
+            count++;
+        }
+    }
+
+    free(addresses);
+    return count;
+}
+#else
+int altcross_net_list_broadcast_addresses(char *out, size_t out_addr_size,
+                                           int max_count) {
+    struct ifaddrs *ifaddr;
+    if (getifaddrs(&ifaddr) != 0) {
+        return 0;
+    }
+
+    int count = 0;
+    for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) {
+            continue;
+        }
+        if (!(ifa->ifa_flags & IFF_BROADCAST) || !ifa->ifa_broadaddr) {
+            continue;
+        }
+
+        struct sockaddr_in *broadcast_addr =
+            (struct sockaddr_in *)(void *)ifa->ifa_broadaddr;
+        char addr_str[ALTCROSS_BROADCAST_ADDRESS_SIZE];
+        if (!inet_ntop(AF_INET, &broadcast_addr->sin_addr, addr_str,
+                        sizeof(addr_str))) {
+            continue;
+        }
+
+        if (count < max_count) {
+            snprintf(out + (size_t)count * out_addr_size, out_addr_size, "%s",
+                      addr_str);
+        }
+        count++;
+    }
+
+    freeifaddrs(ifaddr);
+    return count;
+}
+#endif
 
 void altcross_socket_close(altcross_socket_t *sock) {
     if (!sock) {
