@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../models/physical_display.dart';
+import '../services/settings_store.dart';
 import '../state/hot_zone_config_store.dart';
 import 'arrangement_screen.dart';
 import 'connections_screen.dart';
+import 'settings_screen.dart';
 
 /// Página inicial: painel com os módulos do app. Cada card navega pra tela
 /// correspondente — a home não guarda estado nem lógica de negócio própria.
@@ -14,10 +16,14 @@ class HomeScreen extends StatelessWidget {
   final SendPairingRequest? sendPairingRequest;
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
+  final AppThemePreference currentThemePreference;
+  final ValueChanged<AppThemePreference> onThemePreferenceChanged;
 
   const HomeScreen({
     super.key,
     required this.store,
+    required this.currentThemePreference,
+    required this.onThemePreferenceChanged,
     this.displayProvider,
     this.discoveryRunner,
     this.sendPairingRequest,
@@ -59,6 +65,17 @@ class HomeScreen extends StatelessWidget {
                   sendPairingRequest: sendPairingRequest,
                   confirmPairing: confirmPairing,
                   pollIncomingPairingRequest: pollIncomingPairingRequest,
+                ),
+              )),
+            ),
+            _ModuleCard(
+              icon: Icons.tune_outlined,
+              title: 'Ajustes',
+              subtitle: 'Aparência do app (claro, escuro ou sistema)',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => SettingsScreen(
+                  currentThemePreference: currentThemePreference,
+                  onThemePreferenceChanged: onThemePreferenceChanged,
                 ),
               )),
             ),

@@ -6,7 +6,9 @@ import 'models/physical_display.dart';
 import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/settings_store.dart';
 import 'state/hot_zone_config_store.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   // Só escuta e responde via unicast — não manda broadcast, então não
@@ -22,13 +24,26 @@ void main() {
   runApp(AltCrossApp(store: HotZoneConfigStore()));
 }
 
-class AltCrossApp extends StatelessWidget {
+ThemeMode _toThemeMode(AppThemePreference preference) {
+  switch (preference) {
+    case AppThemePreference.light:
+      return ThemeMode.light;
+    case AppThemePreference.dark:
+      return ThemeMode.dark;
+    case AppThemePreference.system:
+      return ThemeMode.system;
+  }
+}
+
+class AltCrossApp extends StatefulWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function()? displayProvider;
   final DiscoveryRunner? discoveryRunner;
   final SendPairingRequest? sendPairingRequest;
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
+  final LoadThemePreference loadThemePreference;
+  final SaveThemePreference saveThemePreference;
 
   const AltCrossApp({
     super.key,
@@ -38,23 +53,47 @@ class AltCrossApp extends StatelessWidget {
     this.sendPairingRequest,
     this.confirmPairing,
     this.pollIncomingPairingRequest,
-  });
+    LoadThemePreference? loadThemePreference,
+    SaveThemePreference? saveThemePreference,
+  })  : loadThemePreference =
+            loadThemePreference ?? SettingsStore.loadThemePreference,
+        saveThemePreference =
+            saveThemePreference ?? SettingsStore.saveThemePreference;
+
+  @override
+  State<AltCrossApp> createState() => _AltCrossAppState();
+}
+
+class _AltCrossAppState extends State<AltCrossApp> {
+  late AppThemePreference _themePreference;
+
+  @override
+  void initState() {
+    super.initState();
+    _themePreference = widget.loadThemePreference();
+  }
+
+  void _changeThemePreference(AppThemePreference preference) {
+    widget.saveThemePreference(preference);
+    setState(() => _themePreference = preference);
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'AltCross',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: _toThemeMode(_themePreference),
       home: HomeScreen(
-        store: store,
-        displayProvider: displayProvider,
-        discoveryRunner: discoveryRunner,
-        sendPairingRequest: sendPairingRequest,
-        confirmPairing: confirmPairing,
-        pollIncomingPairingRequest: pollIncomingPairingRequest,
+        store: widget.store,
+        displayProvider: widget.displayProvider,
+        discoveryRunner: widget.discoveryRunner,
+        sendPairingRequest: widget.sendPairingRequest,
+        confirmPairing: widget.confirmPairing,
+        pollIncomingPairingRequest: widget.pollIncomingPairingRequest,
+        currentThemePreference: _themePreference,
+        onThemePreferenceChanged: _changeThemePreference,
       ),
     );
   }
