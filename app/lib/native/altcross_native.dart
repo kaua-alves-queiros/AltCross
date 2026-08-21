@@ -26,10 +26,30 @@ final class _NativeDisplay extends Struct {
   external int isPrimary;
 }
 
-typedef _EnumerateDisplaysNative = Int32 Function(
-    Pointer<_NativeDisplay> out, Int32 maxCount);
-typedef _EnumerateDisplaysDart = int Function(
-    Pointer<_NativeDisplay> out, int maxCount);
+/// Espelha `altcross_display_ex_t` de core/include/altcross/displays.h.
+final class _NativeDisplayEx extends Struct {
+  @Uint32()
+  external int displayId;
+  @Double()
+  external double x;
+  @Double()
+  external double y;
+  @Double()
+  external double width;
+  @Double()
+  external double height;
+  @Int32()
+  external int isPrimary;
+}
+
+typedef _EnumerateDisplaysExNative = Int32 Function(
+    Pointer<_NativeDisplayEx> out, Int32 maxCount);
+typedef _EnumerateDisplaysExDart = int Function(
+    Pointer<_NativeDisplayEx> out, int maxCount);
+
+typedef _SetDisplayOriginNative = Int32 Function(
+    Uint32 displayId, Int32 x, Int32 y);
+typedef _SetDisplayOriginDart = int Function(int displayId, int x, int y);
 
 typedef _LoadIdentityNative = Int32 Function(
     Pointer<Utf8> path, Pointer<Uint8> outDeviceId);
@@ -178,7 +198,7 @@ const int _hostSize = 46;
 /// nativa em um lugar só).
 class AltCrossNative {
   static DynamicLibrary? _lib;
-  static _EnumerateDisplaysDart? _enumerateDisplays;
+  static _EnumerateDisplaysExDart? _enumerateDisplaysEx;
 
   static DynamicLibrary _library() {
     return _lib ??= _open();
@@ -205,20 +225,23 @@ class AltCrossNative {
 
   /// Monitores físicos conectados a esta máquina agora, em coordenadas do
   /// espaço virtual do SO. Chama o Core em C de verdade (NSScreen no macOS,
-  /// EnumDisplayMonitors no Windows) — não é mock nem dado inventado.
+  /// EnumDisplayMonitors no Windows) — não é mock nem dado inventado. Usa a
+  /// variante `_ex`, que também traz o id estável de cada monitor (ver
+  /// `setLocalDisplayOrigin`) — é o que permite reposicionar de verdade.
   static List<PhysicalDisplay> enumerateDisplays() {
-    final enumerate = _enumerateDisplays ??= _library()
-        .lookup<NativeFunction<_EnumerateDisplaysNative>>(
-            'altcross_displays_enumerate')
+    final enumerate = _enumerateDisplaysEx ??= _library()
+        .lookup<NativeFunction<_EnumerateDisplaysExNative>>(
+            'altcross_displays_enumerate_ex')
         .asFunction();
 
-    final buffer = calloc<_NativeDisplay>(_maxDisplays);
+    final buffer = calloc<_NativeDisplayEx>(_maxDisplays);
     try {
       final total = enumerate(buffer, _maxDisplays);
       final count = total < _maxDisplays ? total : _maxDisplays;
       return [
         for (var i = 0; i < count; i++)
           PhysicalDisplay(
+            displayId: buffer[i].displayId,
             x: buffer[i].x,
             y: buffer[i].y,
             width: buffer[i].width,
@@ -229,6 +252,25 @@ class AltCrossNative {
     } finally {
       calloc.free(buffer);
     }
+  }
+
+  /// Reposiciona DE VERDADE, no sistema operacional, o monitor físico
+  /// `displayId` (ver `PhysicalDisplay.displayId`, sempre de
+  /// `enumerateDisplays` — nunca de `queryPeerScreens`, que é de outra
+  /// máquina) pra que o canto superior esquerdo dele fique em (x, y).
+  /// Retorna true se o SO aceitou. No macOS exige App Sandbox desligado
+  /// (ver macos/Runner/*.entitlements) — o sistema bloqueia isso de dentro
+  /// do sandbox sem exceção nenhuma.
+  static bool setLocalDisplayOrigin({
+    required int displayId,
+    required int x,
+    required int y,
+  }) {
+    final setOrigin = _library()
+        .lookup<NativeFunction<_SetDisplayOriginNative>>(
+            'altcross_displays_set_origin')
+        .asFunction<_SetDisplayOriginDart>();
+    return setOrigin(displayId, x, y) == 0;
   }
 
   static String _identityFilePath() {
