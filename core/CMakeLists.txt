@@ -9,7 +9,14 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-add_compile_options(-Wall -Wextra -Wpedantic)
+# Níveis de warning altos em qualquer compilador: -Wextra/-Wpedantic são
+# específicos de GCC/Clang — o cl.exe do MSVC rejeita esses flags (D8021) e
+# usa /W4 como equivalente.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+elseif(MSVC)
+    add_compile_options(/W4)
+endif()
 
 set(ALTCROSS_CORE_SOURCES
     src/hotzone.c
