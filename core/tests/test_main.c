@@ -10,6 +10,7 @@ void run_pairing_tests(void);
 void run_pairing_protocol_tests(void);
 void run_screen_sync_protocol_tests(void);
 void run_discovery_tests(void);
+void run_platform_input_tests(void);
 
 int main(void) {
     run_hotzone_tests();
@@ -20,6 +21,7 @@ int main(void) {
     run_pairing_protocol_tests();
     run_screen_sync_protocol_tests();
     run_discovery_tests();
+    run_platform_input_tests();
 
     printf("\n%d tests, %d failures\n", altcross_test_count,
            altcross_test_failures);

@@ -302,3 +302,21 @@ void altcross_platform_input_inject_key(altcross_keycode_t key, int down) {
     input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     SendInput(1, &input, sizeof(INPUT));
 }
+
+/* NÃO VERIFICADO EM WINDOWS DE VERDADE (mesma ressalva do resto deste
+ * arquivo). GetCursorPos/SetCursorPos já usam o espaço de coordenadas
+ * virtual do Windows direto, sem normalização (mesma convenção que
+ * altcross_displays_enumerate já usa pro Windows, ver displays.c). */
+int altcross_platform_get_cursor_position(int *out_x, int *out_y) {
+    POINT p;
+    if (!GetCursorPos(&p)) {
+        return 1;
+    }
+    *out_x = p.x;
+    *out_y = p.y;
+    return 0;
+}
+
+int altcross_platform_warp_cursor(int x, int y) {
+    return SetCursorPos(x, y) ? 0 : 1;
+}
