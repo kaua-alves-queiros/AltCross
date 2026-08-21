@@ -11,12 +11,18 @@ class HomeScreen extends StatelessWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function()? displayProvider;
   final DiscoveryRunner? discoveryRunner;
+  final SendPairingRequest? sendPairingRequest;
+  final ConfirmPairing? confirmPairing;
+  final PollIncomingPairingRequest? pollIncomingPairingRequest;
 
   const HomeScreen({
     super.key,
     required this.store,
     this.displayProvider,
     this.discoveryRunner,
+    this.sendPairingRequest,
+    this.confirmPairing,
+    this.pollIncomingPairingRequest,
   });
 
   @override
@@ -50,6 +56,9 @@ class HomeScreen extends StatelessWidget {
                 builder: (_) => ConnectionsScreen(
                   store: store,
                   discoveryRunner: discoveryRunner,
+                  sendPairingRequest: sendPairingRequest,
+                  confirmPairing: confirmPairing,
+                  pollIncomingPairingRequest: pollIncomingPairingRequest,
                 ),
               )),
             ),

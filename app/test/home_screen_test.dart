@@ -12,6 +12,9 @@ Future<void> pumpHome(WidgetTester tester, HotZoneConfigStore store) async {
         PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
       ],
       discoveryRunner: ({timeoutMs = 0, maxResults = 0}) async => [],
+      // sem isso, o timer de polling da tela de Conexões chamaria o FFI de
+      // verdade (não disponível no ambiente de teste) assim que navegada.
+      pollIncomingPairingRequest: () => null,
     ),
   ));
 }

@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/discovered_device.dart';
 import '../models/hot_zone.dart';
+import '../models/pairing.dart';
 import '../native/altcross_native.dart';
 import '../services/hot_zone_labels.dart';
 import '../state/hot_zone_config_store.dart';
@@ -11,15 +15,43 @@ typedef DiscoveryRunner = Future<List<DiscoveredDevice>> Function({
   int maxResults,
 });
 
-/// Tela de conexões: mapeia os dispositivos já configurados (mesma fonte de
-/// dados da tela de arranjo, `HotZoneConfigStore`) e deixa disparar uma
-/// busca por dispositivos AltCross na rede local.
+typedef SendPairingRequest = bool Function({
+  required String peerHost,
+  required String myName,
+});
+
+typedef ConfirmPairing = Future<PairingResult> Function({
+  required String peerHost,
+  required int code,
+  int timeoutMs,
+});
+
+typedef PollIncomingPairingRequest = IncomingPairingRequest? Function();
+
+/// Tela de conexões: mapeia os dispositivos já pareados (mesma fonte de
+/// dados da tela de arranjo, `HotZoneConfigStore`) e deixa parear com
+/// dispositivos encontrados na rede — de verdade, com troca de código de
+/// confirmação, não só "clicar e já adicionar".
 class ConnectionsScreen extends StatefulWidget {
   final HotZoneConfigStore store;
   final DiscoveryRunner discoveryRunner;
+  final SendPairingRequest sendPairingRequest;
+  final ConfirmPairing confirmPairing;
+  final PollIncomingPairingRequest pollIncomingPairingRequest;
 
-  const ConnectionsScreen({super.key, required this.store, DiscoveryRunner? discoveryRunner})
-      : discoveryRunner = discoveryRunner ?? AltCrossNative.runDiscovery;
+  const ConnectionsScreen({
+    super.key,
+    required this.store,
+    DiscoveryRunner? discoveryRunner,
+    SendPairingRequest? sendPairingRequest,
+    ConfirmPairing? confirmPairing,
+    PollIncomingPairingRequest? pollIncomingPairingRequest,
+  })  : discoveryRunner = discoveryRunner ?? AltCrossNative.runDiscovery,
+        sendPairingRequest =
+            sendPairingRequest ?? AltCrossNative.sendPairingRequest,
+        confirmPairing = confirmPairing ?? AltCrossNative.confirmPairing,
+        pollIncomingPairingRequest = pollIncomingPairingRequest ??
+            AltCrossNative.pollIncomingPairingRequest;
 
   @override
   State<ConnectionsScreen> createState() => _ConnectionsScreenState();
@@ -31,7 +63,51 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
   _SearchState _searchState = _SearchState.idle;
   List<DiscoveredDevice> _discovered = [];
   String? _error;
-  String? _addMessage;
+  String? _message;
+
+  Timer? _incomingPollTimer;
+  bool _showingIncomingDialog = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _incomingPollTimer =
+        Timer.periodic(const Duration(milliseconds: 700), (_) => _pollIncoming());
+  }
+
+  @override
+  void dispose() {
+    _incomingPollTimer?.cancel();
+    super.dispose();
+  }
+
+  void _pollIncoming() {
+    if (_showingIncomingDialog || !mounted) {
+      return;
+    }
+    final incoming = widget.pollIncomingPairingRequest();
+    if (incoming == null) {
+      return;
+    }
+    _showingIncomingDialog = true;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pedido de pareamento'),
+        content: Text(
+          '${incoming.requesterName} quer se conectar.\n\n'
+          'Informe este código para ele confirmar:\n\n${incoming.code}',
+          key: const Key('incoming-pairing-code'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    ).then((_) => _showingIncomingDialog = false);
+  }
 
   Future<void> _runDiscovery() async {
     setState(() {
@@ -52,16 +128,52 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     }
   }
 
-  void _addDiscoveredDevice(DiscoveredDevice device) {
-    try {
-      widget.store.add(HotZoneConfig(
-        edge: HotZoneEdge.right,
-        targetDeviceId: device.deviceId,
-        enabled: true,
-      ));
-      setState(() => _addMessage = null);
-    } on StateError catch (e) {
-      setState(() => _addMessage = e.message);
+  Future<void> _startPairing(DiscoveredDevice device) async {
+    final sent = widget.sendPairingRequest(
+      peerHost: device.host,
+      myName: Platform.localHostname,
+    );
+    if (!sent) {
+      setState(() => _message = 'Não consegui mandar o pedido de pareamento.');
+      return;
+    }
+
+    final code = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => _PairingCodeDialog(deviceName: device.name),
+    );
+    if (code == null || !mounted) {
+      return;
+    }
+
+    setState(() => _message = 'Confirmando pareamento com ${device.name}...');
+    final result = await widget.confirmPairing(
+      peerHost: device.host,
+      code: code,
+    );
+    if (!mounted) {
+      return;
+    }
+
+    switch (result.outcome) {
+      case PairingOutcome.accepted:
+        try {
+          widget.store.add(HotZoneConfig(
+            edge: HotZoneEdge.right,
+            targetDeviceId: result.deviceId!,
+            enabled: true,
+          ));
+        } on StateError {
+          /* já configurado numa borda — pareamento em si já foi salvo */
+        }
+        setState(() => _message = 'Pareado com ${result.name} com sucesso.');
+        break;
+      case PairingOutcome.rejected:
+        setState(() => _message = 'Código incorreto — pareamento recusado.');
+        break;
+      case PairingOutcome.error:
+        setState(() => _message = 'Falha de rede ao confirmar o pareamento.');
+        break;
     }
   }
 
@@ -127,21 +239,67 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
                   title: Text(device.name),
                   subtitle: Text('${device.host}:${device.port}'),
                   trailing: TextButton(
-                    onPressed: () => _addDiscoveredDevice(device),
+                    key: Key('pair-button-${device.deviceId}'),
+                    onPressed: () => _startPairing(device),
                     child: const Text('Adicionar'),
                   ),
                 ),
               ),
-          if (_addMessage != null)
+          if (_message != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                _addMessage!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
+              child: Text(_message!, key: const Key('pairing-message')),
             ),
         ],
       ),
+    );
+  }
+}
+
+class _PairingCodeDialog extends StatefulWidget {
+  final String deviceName;
+
+  const _PairingCodeDialog({required this.deviceName});
+
+  @override
+  State<_PairingCodeDialog> createState() => _PairingCodeDialogState();
+}
+
+class _PairingCodeDialogState extends State<_PairingCodeDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Parear com ${widget.deviceName}'),
+      content: TextField(
+        key: const Key('pairing-code-field'),
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        decoration: const InputDecoration(
+          labelText: 'Código mostrado no outro dispositivo',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final code = int.tryParse(_controller.text.trim());
+            Navigator.of(context).pop(code);
+          },
+          child: const Text('Confirmar'),
+        ),
+      ],
     );
   }
 }

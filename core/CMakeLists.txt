@@ -24,6 +24,7 @@ set(ALTCROSS_CORE_SOURCES
     src/protocol.c
     src/net_socket.c
     src/pairing.c
+    src/pairing_protocol.c
     src/discovery.c
 )
 
@@ -83,6 +84,7 @@ add_executable(altcross_core_tests
     tests/test_protocol.c
     tests/test_net_socket.c
     tests/test_pairing.c
+    tests/test_pairing_protocol.c
     tests/test_discovery.c
 )
 target_link_libraries(altcross_core_tests PRIVATE altcross_core)

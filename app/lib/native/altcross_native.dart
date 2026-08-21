@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 
 import '../models/discovered_device.dart';
+import '../models/pairing.dart';
 import '../models/physical_display.dart';
 
 /// Espelha `altcross_display_t` de core/include/altcross/displays.h — os
@@ -57,6 +58,51 @@ typedef _StartResponderDart = int Function(
 
 typedef _StopResponderNative = Void Function();
 typedef _StopResponderDart = void Function();
+
+/// Espelha `altcross_pairing_incoming_request_t` de
+/// core/include/altcross/pairing_protocol.h.
+final class _NativeIncomingRequest extends Struct {
+  @Int32()
+  external int pending;
+  @Array(33)
+  external Array<Uint8> requesterDeviceId;
+  @Array(64)
+  external Array<Uint8> requesterName;
+  @Int32()
+  external int code;
+}
+
+typedef _StartPairingResponderNative = Int32 Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name, Pointer<Utf8> storePath);
+typedef _StartPairingResponderDart = int Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name, Pointer<Utf8> storePath);
+
+typedef _PollIncomingRequestNative = Int32 Function(
+    Pointer<_NativeIncomingRequest> out);
+typedef _PollIncomingRequestDart = int Function(
+    Pointer<_NativeIncomingRequest> out);
+
+typedef _SendPairingRequestNative = Int32 Function(
+    Pointer<Utf8> myDeviceId, Pointer<Utf8> myName, Pointer<Utf8> peerHost);
+typedef _SendPairingRequestDart = int Function(
+    Pointer<Utf8> myDeviceId, Pointer<Utf8> myName, Pointer<Utf8> peerHost);
+
+typedef _ConfirmPairingNative = Int32 Function(
+    Pointer<Utf8> myDeviceId,
+    Pointer<Utf8> peerHost,
+    Int32 code,
+    Int32 timeoutMs,
+    Pointer<Utf8> storePath,
+    Pointer<Uint8> outDeviceId,
+    Pointer<Uint8> outName);
+typedef _ConfirmPairingDart = int Function(
+    Pointer<Utf8> myDeviceId,
+    Pointer<Utf8> peerHost,
+    int code,
+    int timeoutMs,
+    Pointer<Utf8> storePath,
+    Pointer<Uint8> outDeviceId,
+    Pointer<Uint8> outName);
 
 const int _maxDisplays = 16;
 
@@ -251,6 +297,151 @@ class AltCrossNative {
       calloc.free(namesBuffer);
       calloc.free(hostsBuffer);
       calloc.free(portsBuffer);
+    }
+  }
+
+  static String _pairingStorePath() {
+    final base = Platform.isWindows
+        ? Platform.environment['APPDATA'] ?? Directory.systemTemp.path
+        : Platform.environment['HOME'] ?? Directory.systemTemp.path;
+    final dir = Directory('$base/.altcross');
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    return '${dir.path}/trusted_devices.txt';
+  }
+
+  static bool _pairingResponderStarted = false;
+
+  /// Sobe o respondedor de pareamento (ver `altcross_pairing_start_
+  /// responder`): a partir daqui, esta máquina passa a aceitar pedidos de
+  /// pareamento (`sendPairingRequest`) de outras. Só escuta/responde
+  /// unicast pra quem pediu — não faz broadcast. Idempotente.
+  static void startPairingResponder({required String name}) {
+    if (_pairingResponderStarted) {
+      return;
+    }
+    final start = _library()
+        .lookup<NativeFunction<_StartPairingResponderNative>>(
+            'altcross_pairing_start_responder')
+        .asFunction<_StartPairingResponderDart>();
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final nameNative = name.toNativeUtf8();
+    final storePathNative = _pairingStorePath().toNativeUtf8();
+    try {
+      final rc = start(deviceIdNative, nameNative, storePathNative);
+      _pairingResponderStarted = rc == 0;
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(nameNative);
+      calloc.free(storePathNative);
+    }
+  }
+
+  static String _readFixedArray(Array<Uint8> array, int maxLen) {
+    final bytes = <int>[];
+    for (var i = 0; i < maxLen; i++) {
+      final byte = array[i];
+      if (byte == 0) break;
+      bytes.add(byte);
+    }
+    return utf8.decode(bytes);
+  }
+
+  /// Consome (se houver) um pedido de pareamento recebido de outro
+  /// dispositivo — a UI deve mostrar `code` na tela pra quem pediu digitar
+  /// do outro lado. Retorna null se não há nenhum pedido pendente agora.
+  static IncomingPairingRequest? pollIncomingPairingRequest() {
+    final poll = _library()
+        .lookup<NativeFunction<_PollIncomingRequestNative>>(
+            'altcross_pairing_poll_incoming_request')
+        .asFunction<_PollIncomingRequestDart>();
+
+    final out = calloc<_NativeIncomingRequest>();
+    try {
+      final found = poll(out);
+      if (found == 0) {
+        return null;
+      }
+      return IncomingPairingRequest(
+        requesterDeviceId:
+            _readFixedArray(out.ref.requesterDeviceId, _deviceIdSize),
+        requesterName: _readFixedArray(out.ref.requesterName, _deviceNameSize),
+        code: out.ref.code,
+      );
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// Manda um pedido de pareamento de verdade pra peerHost. Não espera
+  /// resposta (o código de confirmação aparece do lado de lá) — retorna
+  /// true se conseguiu mandar o pacote.
+  static bool sendPairingRequest({
+    required String peerHost,
+    required String myName,
+  }) {
+    final send = _library()
+        .lookup<NativeFunction<_SendPairingRequestNative>>(
+            'altcross_pairing_send_request')
+        .asFunction<_SendPairingRequestDart>();
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final nameNative = myName.toNativeUtf8();
+    final hostNative = peerHost.toNativeUtf8();
+    try {
+      return send(deviceIdNative, nameNative, hostNative) == 0;
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(nameNative);
+      calloc.free(hostNative);
+    }
+  }
+
+  /// Depois que o usuário digitou o código mostrado na tela do outro
+  /// dispositivo, confirma o pareamento de verdade pela rede e — se aceito —
+  /// já salva o segredo compartilhado (sobrevive a troca de IP). Roda numa
+  /// isolate pra não travar a UI enquanto espera a resposta.
+  static Future<PairingResult> confirmPairing({
+    required String peerHost,
+    required int code,
+    int timeoutMs = 3000,
+  }) {
+    return Isolate.run(() => _confirmPairingSync(peerHost, code, timeoutMs));
+  }
+
+  static PairingResult _confirmPairingSync(
+      String peerHost, int code, int timeoutMs) {
+    final confirm = _library()
+        .lookup<NativeFunction<_ConfirmPairingNative>>(
+            'altcross_pairing_confirm')
+        .asFunction<_ConfirmPairingDart>();
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final hostNative = peerHost.toNativeUtf8();
+    final storePathNative = _pairingStorePath().toNativeUtf8();
+    final outDeviceId = calloc<Uint8>(_deviceIdSize);
+    final outName = calloc<Uint8>(_deviceNameSize);
+    try {
+      final rc = confirm(deviceIdNative, hostNative, code, timeoutMs,
+          storePathNative, outDeviceId, outName);
+      if (rc == 1) {
+        return PairingResult.accepted(
+          deviceId: _readFixedString(outDeviceId, 0, _deviceIdSize),
+          name: _readFixedString(outName, 0, _deviceNameSize),
+        );
+      }
+      if (rc == 0) {
+        return PairingResult.rejected();
+      }
+      return PairingResult.error();
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(hostNative);
+      calloc.free(storePathNative);
+      calloc.free(outDeviceId);
+      calloc.free(outName);
     }
   }
 
