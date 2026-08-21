@@ -1,6 +1,7 @@
 import 'package:altcross_app/models/hot_zone.dart';
 import 'package:altcross_app/models/local_hotzone.dart';
 import 'package:altcross_app/models/physical_display.dart';
+import 'package:altcross_app/native/altcross_native.dart';
 import 'package:altcross_app/screens/arrangement_screen.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
 import 'package:altcross_app/state/local_hotzone_store.dart';

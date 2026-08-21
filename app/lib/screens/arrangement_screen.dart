@@ -10,9 +10,6 @@ import '../services/screen_connections.dart';
 import '../state/hot_zone_config_store.dart';
 import '../state/local_hotzone_store.dart';
 
-typedef LookupTrustedHost = String? Function(String deviceId);
-typedef QueryPeerScreens = Future<List<PhysicalDisplay>> Function(
-    String peerHost);
 typedef PushZoneToPeer = bool Function({
   required String peerHost,
   required String myName,

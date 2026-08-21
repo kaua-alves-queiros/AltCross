@@ -27,6 +27,11 @@ set(ALTCROSS_CORE_SOURCES
     src/pairing_protocol.c
     src/screen_sync_protocol.c
     src/discovery.c
+    src/sha256.c
+    src/hmac_sha256.c
+    src/handoff_protocol.c
+    src/handoff.c
+    src/connection_monitor.c
 )
 
 # discovery.c usa pthread (POSIX) pra thread do respondedor de descoberta —
@@ -89,6 +94,10 @@ add_executable(altcross_core_tests
     tests/test_screen_sync_protocol.c
     tests/test_discovery.c
     tests/test_platform_input.c
+    tests/test_sha256.c
+    tests/test_hmac_sha256.c
+    tests/test_handoff_protocol.c
+    tests/test_connection_monitor.c
 )
 target_link_libraries(altcross_core_tests PRIVATE altcross_core)
 target_include_directories(altcross_core_tests PRIVATE tests)
