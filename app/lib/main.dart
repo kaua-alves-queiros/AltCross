@@ -15,6 +15,10 @@ void main() {
   // aparecer quando outra roda "Buscar dispositivos".
   AltCrossNative.startDiscoveryResponder(name: Platform.localHostname);
 
+  // Sobe o respondedor de pareamento também — sem isso, ninguém consegue
+  // parear com esta máquina (só descobrir que ela existe).
+  AltCrossNative.startPairingResponder(name: Platform.localHostname);
+
   runApp(AltCrossApp(store: HotZoneConfigStore()));
 }
 
@@ -22,12 +26,18 @@ class AltCrossApp extends StatelessWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function()? displayProvider;
   final DiscoveryRunner? discoveryRunner;
+  final SendPairingRequest? sendPairingRequest;
+  final ConfirmPairing? confirmPairing;
+  final PollIncomingPairingRequest? pollIncomingPairingRequest;
 
   const AltCrossApp({
     super.key,
     required this.store,
     this.displayProvider,
     this.discoveryRunner,
+    this.sendPairingRequest,
+    this.confirmPairing,
+    this.pollIncomingPairingRequest,
   });
 
   @override
@@ -42,6 +52,9 @@ class AltCrossApp extends StatelessWidget {
         store: store,
         displayProvider: displayProvider,
         discoveryRunner: discoveryRunner,
+        sendPairingRequest: sendPairingRequest,
+        confirmPairing: confirmPairing,
+        pollIncomingPairingRequest: pollIncomingPairingRequest,
       ),
     );
   }
