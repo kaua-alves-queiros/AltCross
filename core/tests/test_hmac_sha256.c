@@ -78,21 +78,30 @@ static void test_rfc4231_case6_key_longer_than_block(void) {
 }
 
 /* Chave de 32 bytes (formato real de altcross_pairing_generate_secret, ver
- * pairing.h) — o caso que a autenticação de handoff usa de verdade. */
+ * pairing.h) — o caso que a autenticação de handoff usa de verdade. Bytes
+ * 0x00..0x1f de propósito (em vez de um hex "aleatório" digitado à mão) —
+ * o tamanho errado de uma string hex mal contada é óbvio de bater o olho
+ * aqui, o que já não era o caso antes (ver histórico: uma chave com 2
+ * dígitos hex a menos por engano deixava o último byte sem inicializar,
+ * lido do lixo da pilha — passava por acidente no macOS/Clang e batia
+ * diferente no Windows/MSVC, parecendo um bug de portabilidade no
+ * HMAC/SHA-256 em si, que nunca existiu). */
 static void test_32_byte_pairing_style_key(void) {
     uint8_t key[32];
-    from_hex(
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddee", key);
+    size_t key_len = from_hex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        key);
+    ASSERT_EQ(sizeof(key), key_len);
     const char *data = "altcross-test-payload";
 
     uint8_t tag[ALTCROSS_SHA256_DIGEST_SIZE];
-    altcross_hmac_sha256(key, sizeof(key), (const uint8_t *)data, strlen(data),
+    altcross_hmac_sha256(key, key_len, (const uint8_t *)data, strlen(data),
                           tag);
 
     char hex[ALTCROSS_SHA256_DIGEST_SIZE * 2 + 1];
     to_hex(tag, ALTCROSS_SHA256_DIGEST_SIZE, hex);
     ASSERT_EQ(0, strcmp(hex,
-        "f0087146b96a57de8f32b5593ebd440c9486eb35614e43310cafc6384702bc3a"));
+        "673e68ed77df17c55889b9eb512fec3723933c14ef2c158da476b713edd5e151"));
 }
 
 static void test_constant_time_equal(void) {

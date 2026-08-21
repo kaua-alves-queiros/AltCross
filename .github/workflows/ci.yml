@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  # só a main dispara por push direto — uma branch com PR aberto já roda
+  # via pull_request abaixo; sem essa restrição, cada push numa branch de
+  # PR disparava os 2 gatilhos ao mesmo tempo (run duplicado).
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancela runs anteriores da mesma branch/PR quando um push novo chega —
+# sem isso, cada push em sequência rápida deixa vários runs redundantes
+# rodando ao mesmo tempo.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Core em C: compila e roda os testes de verdade (ctest) nas 2 plataformas
+  # de desenvolvimento ativo (ver AGENTS.md — Linux não é alvo agora).
+  core-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CMake)
+        run: cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build core/build --config Debug
+
+      - name: Test (ctest)
+        run: ctest --test-dir core/build --output-on-failure --build-config Debug
+
+  # App em Flutter: analyze + testes (flutter_test), sem precisar de build
+  # nativo completo — mais rápido, roda em qualquer runner (nenhum teste
+  # aqui toca dart:ffi de verdade, tudo é injetado via fakes, ver
+  # AGENTS.md: "lib/native/ ... só compila com a lib nativa de verdade
+  # presente").
+  flutter-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: flutter analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: flutter test
+        working-directory: app
+        run: flutter test
+
+  # Build completo do app de verdade no macOS (Xcode + o Core em C embutido
+  # via build phase, ver macos/Runner.xcodeproj) — pega problemas que os
+  # testes puros não pegam, tipo struct FFI desalinhada com o .dylib de
+  # verdade (já aconteceu nesta sessão de desenvolvimento).
+  macos-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: flutter build macos (debug)
+        working-directory: app
+        run: flutter build macos --debug
+
+  # Idem no Windows — o app também builda lá (ver windows/), mesmo com a
+  # ressalva de "NÃO VERIFICADO EM WINDOWS DE VERDADE" no runtime de alguns
+  # módulos nativos (captura/injeção, telas) já documentada no AGENTS.md.
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: flutter build windows (debug)
+        working-directory: app
+        run: flutter build windows --debug

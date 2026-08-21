@@ -931,8 +931,16 @@ class AltCrossNative {
 
   static bool _monitorRunning = false;
 
+  /// Callback nativo registrado em `startConnectionMonitor` — precisa ficar
+  /// vivo (não coletado) e ser fechado em `stopConnectionMonitor`, senão o
+  /// core em C mantém um function pointer pendurado numa closure já morta.
+  static NativeCallable<_StatusCallbackNative>? _statusCallable;
+
   /// Inicia o monitor de heartbeat em background. Quando a connectividade
-  /// com um peer pareado muda, chama [onStatusChange].
+  /// com um peer pareado muda, chama [onStatusChange]. O core roda isso
+  /// numa thread própria — por isso o callback usa `NativeCallable.listener`
+  /// (não `Pointer.fromFunction`), que é o jeito seguro de receber uma
+  /// chamada vinda de fora da isolate Dart.
   static void startConnectionMonitor({
     required void Function(String deviceId, bool online) onStatusChange,
   }) {
@@ -943,11 +951,21 @@ class AltCrossNative {
             'altcross_connection_monitor_start')
         .asFunction<_StartConnectionMonitorDart>();
 
+    final callable = NativeCallable<_StatusCallbackNative>.listener(
+        (Pointer<Utf8> deviceId, int online, Pointer<Void> userData) {
+      onStatusChange(deviceId.toDartString(), online != 0);
+    });
+    _statusCallable = callable;
+
     final storePath = _pairingStorePath().toNativeUtf8();
     try {
-      final rc = start(storePath, onStatusChange);
+      final rc =
+          start(storePath, callable.nativeFunction, nullptr);
       if (rc == 0) {
         _monitorRunning = true;
+      } else {
+        callable.close();
+        _statusCallable = null;
       }
     } finally {
       calloc.free(storePath);
@@ -965,6 +983,8 @@ class AltCrossNative {
 
     stop();
     _monitorRunning = false;
+    _statusCallable?.close();
+    _statusCallable = null;
   }
 
   /// Retorna o status online/offline de um peer específico.
@@ -985,17 +1005,24 @@ class AltCrossNative {
 }
 
 // ── Connection Monitor typedefs ─────────────────────────────────────
+//
+// Espelham altcross_connection_status_cb/altcross_connection_monitor_* de
+// core/include/altcross/connection_monitor.h.
 
-typedef _StatusCallbackNative = Void Function(Utf8 device_id, Int32 online);
-typedef _StatusCallbackDart = void Function(String device_id, int online);
+typedef _StatusCallbackNative = Void Function(
+    Pointer<Utf8> deviceId, Int32 online, Pointer<Void> userData);
 
 typedef _StartConnectionMonitorNative = Int32 Function(
-    Utf8 store_path, _StatusCallbackNative callback);
+    Pointer<Utf8> storePath,
+    Pointer<NativeFunction<_StatusCallbackNative>> callback,
+    Pointer<Void> userData);
 typedef _StartConnectionMonitorDart = int Function(
-    String storePath, _StatusCallbackDart callback);
+    Pointer<Utf8> storePath,
+    Pointer<NativeFunction<_StatusCallbackNative>> callback,
+    Pointer<Void> userData);
 
 typedef _StopConnectionMonitorNative = Void Function();
 typedef _StopConnectionMonitorDart = void Function();
 
-typedef _IsPeerOnlineNative = Int32 Function(Utf8 device_id);
-typedef _IsPeerOnlineDart = int Function(String deviceId);
+typedef _IsPeerOnlineNative = Int32 Function(Pointer<Utf8> deviceId);
+typedef _IsPeerOnlineDart = int Function(Pointer<Utf8> deviceId);

@@ -2,6 +2,7 @@ import 'package:altcross_app/main.dart';
 import 'package:altcross_app/models/hot_zone.dart';
 import 'package:altcross_app/models/physical_display.dart';
 import 'package:altcross_app/models/screen_sync.dart';
+import 'package:altcross_app/services/connection_status.dart';
 import 'package:altcross_app/services/settings_store.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
 import 'package:altcross_app/state/local_hotzone_store.dart';
@@ -14,6 +15,9 @@ void main() {
     await tester.pumpWidget(AltCrossApp(
       store: HotZoneConfigStore(),
       localHotZoneStore: LocalHotZoneStore(),
+      // sem chamar .start() — isso é feito só em main() na vida real; nos
+      // testes é só um notifier inerte, sem tocar no FFI de verdade.
+      connectionStatus: ConnectionStatusNotifier(),
       displayProvider: () => const [
         PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
       ],
@@ -37,6 +41,9 @@ void main() {
     await tester.pumpWidget(AltCrossApp(
       store: HotZoneConfigStore(),
       localHotZoneStore: LocalHotZoneStore(),
+      // sem chamar .start() — isso é feito só em main() na vida real; nos
+      // testes é só um notifier inerte, sem tocar no FFI de verdade.
+      connectionStatus: ConnectionStatusNotifier(),
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (value) => saved = value,
       pollIncomingZone: () => null,
@@ -64,6 +71,9 @@ void main() {
     await tester.pumpWidget(AltCrossApp(
       store: store,
       localHotZoneStore: LocalHotZoneStore(),
+      // sem chamar .start() — isso é feito só em main() na vida real; nos
+      // testes é só um notifier inerte, sem tocar no FFI de verdade.
+      connectionStatus: ConnectionStatusNotifier(),
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (_) {},
       getCursorPosition: () => null,
