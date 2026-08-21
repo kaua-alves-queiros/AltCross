@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/physical_display.dart';
 import '../services/settings_store.dart';
 import '../state/hot_zone_config_store.dart';
+import '../state/local_hotzone_store.dart';
 import 'arrangement_screen.dart';
 import 'connections_screen.dart';
 import 'settings_screen.dart';
@@ -11,6 +12,7 @@ import 'settings_screen.dart';
 /// correspondente — a home não guarda estado nem lógica de negócio própria.
 class HomeScreen extends StatelessWidget {
   final HotZoneConfigStore store;
+  final LocalHotZoneStore localHotZoneStore;
   final List<PhysicalDisplay> Function()? displayProvider;
   final DiscoveryRunner? discoveryRunner;
   final SendPairingRequest? sendPairingRequest;
@@ -23,6 +25,7 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({
     super.key,
     required this.store,
+    required this.localHotZoneStore,
     required this.currentThemePreference,
     required this.onThemePreferenceChanged,
     this.displayProvider,
@@ -52,6 +55,7 @@ class HomeScreen extends StatelessWidget {
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => ArrangementScreen(
                   store: store,
+                  localHotZoneStore: localHotZoneStore,
                   displayProvider: displayProvider,
                 ),
               )),

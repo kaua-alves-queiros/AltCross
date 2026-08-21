@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:ui';
 
 import 'package:ffi/ffi.dart';
 
@@ -50,6 +51,14 @@ typedef _EnumerateDisplaysExDart = int Function(
 typedef _SetDisplayOriginNative = Int32 Function(
     Uint32 displayId, Int32 x, Int32 y);
 typedef _SetDisplayOriginDart = int Function(int displayId, int x, int y);
+
+typedef _GetCursorPositionNative = Int32 Function(
+    Pointer<Int32> outX, Pointer<Int32> outY);
+typedef _GetCursorPositionDart = int Function(
+    Pointer<Int32> outX, Pointer<Int32> outY);
+
+typedef _WarpCursorNative = Int32 Function(Int32 x, Int32 y);
+typedef _WarpCursorDart = int Function(int x, int y);
 
 typedef _LoadIdentityNative = Int32 Function(
     Pointer<Utf8> path, Pointer<Uint8> outDeviceId);
@@ -271,6 +280,40 @@ class AltCrossNative {
             'altcross_displays_set_origin')
         .asFunction<_SetDisplayOriginDart>();
     return setOrigin(displayId, x, y) == 0;
+  }
+
+  /// Posição ATUAL do cursor de verdade (mesma convenção de coordenadas de
+  /// `enumerateDisplays`) — leitura pontual, não instala hook global
+  /// nenhum. Retorna null se a leitura falhar (raríssimo).
+  static Offset? getCursorPosition() {
+    final get = _library()
+        .lookup<NativeFunction<_GetCursorPositionNative>>(
+            'altcross_platform_get_cursor_position')
+        .asFunction<_GetCursorPositionDart>();
+
+    final outX = calloc<Int32>();
+    final outY = calloc<Int32>();
+    try {
+      final rc = get(outX, outY);
+      if (rc != 0) {
+        return null;
+      }
+      return Offset(outX.value.toDouble(), outY.value.toDouble());
+    } finally {
+      calloc.free(outX);
+      calloc.free(outY);
+    }
+  }
+
+  /// Teleporta o cursor de verdade pra (x, y) (mesma convenção acima) — é o
+  /// salto de hotzone entre 2 telas locais de verdade acontecendo. Retorna
+  /// true se o SO aceitou.
+  static bool warpCursor(int x, int y) {
+    final warp = _library()
+        .lookup<NativeFunction<_WarpCursorNative>>(
+            'altcross_platform_warp_cursor')
+        .asFunction<_WarpCursorDart>();
+    return warp(x, y) == 0;
   }
 
   static String _identityFilePath() {
