@@ -91,6 +91,9 @@ static void test_32_byte_pairing_style_key(void) {
 
     char hex[ALTCROSS_SHA256_DIGEST_SIZE * 2 + 1];
     to_hex(tag, ALTCROSS_SHA256_DIGEST_SIZE, hex);
+    printf("DEBUG test_32_byte_pairing_style_key computed=%s\n", hex);
+    printf("DEBUG sizeof(key)=%zu key_len_passed=%zu\n", sizeof(key),
+           (size_t)32);
     ASSERT_EQ(0, strcmp(hex,
         "f0087146b96a57de8f32b5593ebd440c9486eb35614e43310cafc6384702bc3a"));
 }
