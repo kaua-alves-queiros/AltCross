@@ -5,6 +5,13 @@
 
 #include "altcross/net_socket.h"
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 static const char MAGIC[4] = {'A', 'L', 'T', 'X'};
 #define HEADER_SIZE 6 /* magic(4) + versão(1) + tipo(1) */
 
@@ -185,4 +192,125 @@ int altcross_discovery_run_query(const char *from_device_id, int timeout_ms,
 
     altcross_socket_close(sock);
     return found;
+}
+
+static altcross_socket_t *g_responder_socket = NULL;
+static volatile int g_responder_running = 0;
+static char g_responder_device_id[ALTCROSS_DEVICE_ID_SIZE];
+static char g_responder_name[ALTCROSS_DEVICE_NAME_SIZE];
+static int g_responder_port;
+
+#if defined(_WIN32)
+static HANDLE g_responder_thread;
+#else
+static pthread_t g_responder_thread;
+#endif
+
+static void responder_loop(void) {
+    while (g_responder_running) {
+        uint8_t buf[ALTCROSS_DISCOVERY_MAX_SIZE];
+        char from_host[ALTCROSS_DISCOVERY_HOST_SIZE];
+        int from_port;
+        /* timeout curto só pra poder checar g_responder_running com
+         * frequência e sair rápido quando stop_responder for chamado */
+        int n = altcross_socket_receive_from(g_responder_socket, buf,
+                                              sizeof(buf), 300, from_host,
+                                              sizeof(from_host), &from_port);
+        if (n == ALTCROSS_SOCKET_TIMEOUT || n < 0) {
+            continue;
+        }
+
+        altcross_discovery_msg_type_t type;
+        char query_from[ALTCROSS_DEVICE_ID_SIZE];
+        altcross_discovery_reply_t unused_reply;
+        if (!altcross_discovery_decode(buf, (size_t)n, &type, query_from,
+                                        &unused_reply)) {
+            continue;
+        }
+        if (type != ALTCROSS_DISCOVERY_MSG_QUERY) {
+            continue;
+        }
+        if (strcmp(query_from, g_responder_device_id) == 0) {
+            continue; /* nunca deveria acontecer, mas por garantia */
+        }
+
+        uint8_t reply_buf[ALTCROSS_DISCOVERY_MAX_SIZE];
+        int reply_len = altcross_discovery_encode_reply(
+            g_responder_device_id, g_responder_name, g_responder_port,
+            reply_buf, sizeof(reply_buf));
+        if (reply_len > 0) {
+            altcross_socket_send_to(g_responder_socket, from_host, from_port,
+                                     reply_buf, (size_t)reply_len);
+        }
+    }
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI responder_thread_proc(LPVOID arg) {
+    (void)arg;
+    responder_loop();
+    return 0;
+}
+#else
+static void *responder_thread_proc(void *arg) {
+    (void)arg;
+    responder_loop();
+    return NULL;
+}
+#endif
+
+int altcross_discovery_start_responder(const char *device_id,
+                                        const char *name, int port) {
+    if (g_responder_running) {
+        return 1;
+    }
+
+    g_responder_socket = altcross_socket_open_udp(ALTCROSS_DISCOVERY_PORT);
+    if (!g_responder_socket) {
+        return 1;
+    }
+
+    snprintf(g_responder_device_id, sizeof(g_responder_device_id), "%s",
+             device_id);
+    snprintf(g_responder_name, sizeof(g_responder_name), "%s", name);
+    g_responder_port = port;
+    g_responder_running = 1;
+
+#if defined(_WIN32)
+    g_responder_thread =
+        CreateThread(NULL, 0, responder_thread_proc, NULL, 0, NULL);
+    if (!g_responder_thread) {
+        g_responder_running = 0;
+        altcross_socket_close(g_responder_socket);
+        g_responder_socket = NULL;
+        return 1;
+    }
+#else
+    if (pthread_create(&g_responder_thread, NULL, responder_thread_proc,
+                        NULL) != 0) {
+        g_responder_running = 0;
+        altcross_socket_close(g_responder_socket);
+        g_responder_socket = NULL;
+        return 1;
+    }
+#endif
+
+    return 0;
+}
+
+void altcross_discovery_stop_responder(void) {
+    if (!g_responder_running) {
+        return;
+    }
+    g_responder_running = 0;
+
+#if defined(_WIN32)
+    WaitForSingleObject(g_responder_thread, INFINITE);
+    CloseHandle(g_responder_thread);
+#else
+    pthread_join(g_responder_thread, NULL);
+#endif
+
+    altcross_socket_close(g_responder_socket);
+    g_responder_socket = NULL;
 }
