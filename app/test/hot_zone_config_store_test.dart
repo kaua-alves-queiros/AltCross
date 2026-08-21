@@ -159,9 +159,20 @@ void main() {
         edge: HotZoneEdge.topLeft,
         targetDeviceId: 'pc-9',
         enabled: true,
+        targetScreenIndex: 2,
       );
       final restored = HotZoneConfig.fromJson(original.toJson());
       expect(restored, original);
+    });
+
+    test('fromJson usa targetScreenIndex 0 quando o campo não existe (arquivo antigo)',
+        () {
+      final restored = HotZoneConfig.fromJson({
+        'edge': 'right',
+        'targetDeviceId': 'pc-9',
+        'enabled': true,
+      });
+      expect(restored.targetScreenIndex, 0);
     });
   });
 }

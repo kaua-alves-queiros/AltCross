@@ -9,11 +9,25 @@ const _fakeDisplays = [
   PhysicalDisplay(x: 0, y: 0, width: 1470, height: 956, isPrimary: true),
 ];
 
-Future<void> pumpScreen(WidgetTester tester, HotZoneConfigStore store) async {
+Future<void> pumpScreen(
+  WidgetTester tester,
+  HotZoneConfigStore store, {
+  LookupTrustedHost? lookupHost,
+  QueryPeerScreens? queryPeerScreens,
+  PushZoneToPeer? pushZoneToPeer,
+}) async {
   await tester.pumpWidget(MaterialApp(
     home: ArrangementScreen(
       store: store,
       displayProvider: () => _fakeDisplays,
+      // sem override, um dispositivo configurado tentaria carregar o FFI de
+      // verdade (não disponível no ambiente de teste) — por padrão nenhum
+      // teste aqui depende de pareamento de verdade, então nunca acha host.
+      lookupHost: lookupHost ?? (_) => null,
+      queryPeerScreens: queryPeerScreens ?? (_) async => const [],
+      pushZoneToPeer: pushZoneToPeer ??
+          ({required peerHost, required myName, required myEdge, required targetScreenIndex}) =>
+              true,
     ),
   ));
 }
@@ -103,6 +117,86 @@ void main() {
     expect(store.zones, isEmpty);
     expect(find.textContaining('não dois dispositivos remotos'),
         findsOneWidget);
+  });
+
+  testWidgets(
+      'dispositivo configurado busca a tela real pela rede — nada de tamanho chutado',
+      (tester) async {
+    final store = HotZoneConfigStore();
+    store.add(const HotZoneConfig(
+      edge: HotZoneEdge.right,
+      targetDeviceId: 'pc-windows',
+      enabled: true,
+    ));
+
+    await pumpScreen(
+      tester,
+      store,
+      lookupHost: (deviceId) =>
+          deviceId == 'pc-windows' ? '192.168.0.42' : null,
+      queryPeerScreens: (peerHost) async {
+        expect(peerHost, '192.168.0.42');
+        return const [
+          PhysicalDisplay(x: 0, y: 0, width: 3440, height: 1440, isPrimary: true),
+        ];
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('3440×1440'), findsOneWidget);
+    expect(find.textContaining('carregando'), findsNothing);
+  });
+
+  testWidgets(
+      'dispositivo nunca pareado mostra que a tela real é desconhecida, não um tamanho chutado',
+      (tester) async {
+    final store = HotZoneConfigStore();
+    store.add(const HotZoneConfig(
+      edge: HotZoneEdge.right,
+      targetDeviceId: 'pc-fantasma',
+      enabled: true,
+    ));
+
+    await pumpScreen(tester, store);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('nunca pareado'), findsOneWidget);
+  });
+
+  testWidgets(
+      'conectar a um dispositivo pareado avisa ele pela rede pra sincronizar o arranjo',
+      (tester) async {
+    final store = HotZoneConfigStore();
+    final pushed = <Map<String, Object?>>[];
+
+    await pumpScreen(
+      tester,
+      store,
+      lookupHost: (deviceId) => '192.168.0.42',
+      pushZoneToPeer: ({
+        required peerHost,
+        required myName,
+        required myEdge,
+        required targetScreenIndex,
+      }) {
+        pushed.add({
+          'peerHost': peerHost,
+          'myEdge': myEdge,
+          'targetScreenIndex': targetScreenIndex,
+        });
+        return true;
+      },
+    );
+    await addDevice(tester, 'pc-windows');
+
+    await tester.tap(find.byKey(_localEdgeKey(HotZoneEdge.right)));
+    await tester.pump();
+    await tester.tap(find.byKey(_deviceEdgeKey('pc-windows', HotZoneEdge.left)));
+    await tester.pumpAndSettle();
+
+    expect(pushed, hasLength(1));
+    expect(pushed.single['peerHost'], '192.168.0.42');
+    expect(pushed.single['myEdge'], HotZoneEdge.right);
   });
 
   testWidgets('remover dispositivo tira do canvas e do store',
