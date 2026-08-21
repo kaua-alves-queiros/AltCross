@@ -80,9 +80,14 @@ core/
 │   │                       # inclui receive_from (dá o IP de quem mandou) e
 │   │                       # enable_broadcast (aciona o prompt de permissão de
 │   │                       # Rede Local — só chamar a partir de ação do usuário)
-│   ├── pairing.h           # cadastro de dispositivos confiáveis (sobrevive a
-│   │                       # troca de IP), código de confirmação, token secreto,
-│   │                       # identidade estável da máquina local
+│   ├── pairing.h           # lógica PURA de pareamento: cadastro de dispositivos
+│   │                       # confiáveis (sobrevive a troca de IP), código de
+│   │                       # confirmação, token secreto, identidade estável
+│   ├── pairing_protocol.h  # handshake de pareamento DE VERDADE pela rede
+│   │                       # (REQUEST/CONFIRM/ACCEPT/REJECT, porta própria) —
+│   │                       # usa a lógica pura de pairing.h; testado de ponta a
+│   │                       # ponta de forma automatizada (unicast, sem risco de
+│   │                       # prompt de permissão, ver test_pairing_protocol.c)
 │   ├── discovery.h         # protocolo de "quem está aí" / "sou eu" por broadcast
 │   │                       # na rede local (não é mDNS/DNS-SD de verdade, ver nota
 │   │                       # em "Fluxo de Desenvolvimento") + altcross_discovery_
@@ -97,6 +102,7 @@ core/
 │   ├── protocol.c
 │   ├── net_socket.c
 │   ├── pairing.c
+│   ├── pairing_protocol.c
 │   ├── discovery.c
 │   └── platform/
 │       ├── macos/platform_input.c   # real, via CGEventTap/CGEventPost — compila
@@ -128,6 +134,8 @@ core/
     ├── test_protocol.c
     ├── test_net_socket.c   # inclui round-trip real por socket UDP em loopback
     ├── test_pairing.c
+    ├── test_pairing_protocol.c  # handshake real de ponta a ponta (unicast em
+    │                             # 127.0.0.1) — automatizado com segurança
     └── test_discovery.c
 ```
 
@@ -187,19 +195,33 @@ app dele já estava rodando com o respondedor). **Ainda não confirmado**: a dir
 Windows→Mac com essa correção (o Windows precisa puxar/recompilar esse código antes
 de testar de novo).
 
-Falta ainda: (1) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`) usando o
-código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos" tanto
-na tela de arranjo quanto os "encontrados" na tela de Conexões não são pareados de
-verdade (arranjo: nome digitado manualmente; conexões: dado bruto da resposta de
-descoberta, sem autenticação, e a porta de pareamento ainda vai sempre `0` já que
-`startDiscoveryResponder` não tem uma porta real de pareamento pra anunciar ainda);
-(2) trocar a resolução de tela real do dispositivo remoto (hoje a tela de arranjo
-assume Full HD por padrão pra todo mundo, até o pareamento trocar essa informação de
-verdade); (3) rodar `altcrossd` (o daemon de mouse/teclado) de verdade end-to-end
-entre 2 máquinas reais — note que a descoberta (responder automático no app Flutter)
-e o handoff de mouse/teclado (`altcrossd`, hook global) são caminhos **separados**
-hoje; a descoberta não depende do daemon arriscado rodar. **Nunca ative o hook de
-captura (`altcross_platform_input_start`) automaticamente** — isso captura o
+**O handshake de pareamento agora existe de verdade** — `pairing_protocol.h`/`.c`
+(novo): `altcross_pairing_start_responder`/`send_request`/`confirm` implementam o
+fluxo completo REQUEST → (código de 6 dígitos gerado e mostrado na tela de quem
+recebe) → CONFIRM → ACCEPT/REJECT com o segredo persistido nos dois lados (usa a
+lógica pura já existente em `pairing.h`: código, segredo, `pairing_store`). Porta fixa
+própria (`ALTCROSS_PAIRING_PORT`, separada da porta de descoberta). Diferente da
+descoberta, esse handshake é unicast direto (nunca broadcast), então **dá pra testar
+de ponta a ponta de forma automatizada de verdade sem risco de prompt de permissão**
+— `test_pairing_protocol.c` sobe um respondedor de verdade e confirma o pareamento de
+verdade pela rede (127.0.0.1), incluindo checar que os dois lados terminam com o
+mesmo segredo salvo em disco. No lado Flutter: `ConnectionsScreen` agora faz o fluxo
+completo — "Adicionar" manda o pedido e abre um diálogo pedindo o código (não
+configura nada sozinho); um `Timer` local consulta pedidos recebidos e mostra o
+código pra confirmar em quem pediu; só depois do ACCEPT é que a conexão vira uma
+`HotZoneConfig`. `main()` sobe o respondedor de pareamento junto com o de descoberta
+ao abrir o app.
+
+Falta ainda: (1) trocar a resolução de tela real do dispositivo remoto (hoje a tela
+de arranjo assume Full HD por padrão pra todo mundo, já que o pareamento ainda não
+troca essa informação); (2) autenticar de fato o tráfego de mouse/teclado
+(`protocol.h`/`altcrossd`) usando o segredo compartilhado que o pareamento já gera —
+hoje esse segredo é gerado e persistido, mas nada valida ele antes de aceitar pacotes
+ENTER/MOUSE_DELTA/etc.; (3) rodar `altcrossd` (o daemon de mouse/teclado) de verdade
+end-to-end entre 2 máquinas reais — note que descoberta+pareamento (respondedores
+automáticos no app Flutter) e o handoff de mouse/teclado (`altcrossd`, hook global)
+são caminhos **separados** hoje; nenhum dos dois depende do outro rodar. **Nunca ative
+o hook de captura (`altcross_platform_input_start`) automaticamente** — isso captura o
 mouse/teclado real de quem estiver rodando; só rodar manualmente, avisando antes. Já
 `list_displays`, `discovery_demo` e o respondedor de descoberta
 (`altcross_discovery_start_responder`) são seguros de rodar/ligar automaticamente (não
