@@ -1,5 +1,6 @@
 import 'package:altcross_app/models/physical_display.dart';
 import 'package:altcross_app/screens/home_screen.dart';
+import 'package:altcross_app/services/settings_store.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,8 @@ Future<void> pumpHome(WidgetTester tester, HotZoneConfigStore store) async {
   await tester.pumpWidget(MaterialApp(
     home: HomeScreen(
       store: store,
+      currentThemePreference: AppThemePreference.system,
+      onThemePreferenceChanged: (_) {},
       displayProvider: () => const [
         PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
       ],
@@ -26,6 +29,7 @@ void main() {
     expect(find.text('AltCross'), findsOneWidget);
     expect(find.text('Arranjo de telas'), findsOneWidget);
     expect(find.text('Conexões'), findsOneWidget);
+    expect(find.text('Ajustes'), findsOneWidget);
   });
 
   testWidgets('abrir o módulo de arranjo navega pra tela de arranjo',
@@ -46,5 +50,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('run-discovery-button')), findsOneWidget);
+  });
+
+  testWidgets('abrir o módulo de ajustes navega pra tela de ajustes',
+      (tester) async {
+    await pumpHome(tester, HotZoneConfigStore());
+
+    await tester.tap(find.text('Ajustes'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Aparência'), findsOneWidget);
   });
 }

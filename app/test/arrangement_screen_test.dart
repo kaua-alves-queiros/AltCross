@@ -1,3 +1,4 @@
+import 'package:altcross_app/models/hot_zone.dart';
 import 'package:altcross_app/models/physical_display.dart';
 import 'package:altcross_app/screens/arrangement_screen.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
@@ -18,6 +19,14 @@ Future<void> pumpScreen(WidgetTester tester, HotZoneConfigStore store) async {
   ));
 }
 
+Future<void> addDevice(WidgetTester tester, String deviceId) async {
+  await tester.tap(find.byKey(const Key('add-device-button')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('device-id-field')), deviceId);
+  await tester.tap(find.text('Adicionar'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('mostra as telas físicas reais retornadas pelo Core',
       (tester) async {
@@ -28,55 +37,31 @@ void main() {
     expect(find.textContaining('principal'), findsOneWidget);
   });
 
-  testWidgets('adicionar dispositivo gruda na borda direita por padrão',
-      (tester) async {
-    final store = HotZoneConfigStore();
-    await pumpScreen(tester, store);
-
-    await tester.tap(find.byKey(const Key('add-device-button')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-        find.byKey(const Key('device-id-field')), 'pc-windows');
-    await tester.tap(find.text('Adicionar'));
-    await tester.pumpAndSettle();
-
-    expect(store.zones, hasLength(1));
-    expect(store.zones.single.targetDeviceId, 'pc-windows');
-    expect(find.byKey(const Key('device-box-pc-windows')), findsOneWidget);
-  });
-
   testWidgets(
-      'segundo dispositivo na mesma borda não comita e mostra aviso',
+      'adicionar dispositivo fica flutuando, sem grudar em nenhuma borda sozinho',
       (tester) async {
     final store = HotZoneConfigStore();
     await pumpScreen(tester, store);
 
-    for (final id in ['pc-windows', 'pc-linux']) {
-      await tester.tap(find.byKey(const Key('add-device-button')));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byKey(const Key('device-id-field')), id);
-      await tester.tap(find.text('Adicionar'));
-      await tester.pumpAndSettle();
-    }
+    await addDevice(tester, 'pc-windows');
 
-    expect(store.zones, hasLength(1));
-    expect(store.zones.single.targetDeviceId, 'pc-windows');
-    expect(find.textContaining('Já existe uma hotzone'), findsOneWidget);
-    // a caixa do segundo dispositivo continua no canvas, só não comitada
-    expect(find.byKey(const Key('device-box-pc-linux')), findsOneWidget);
+    // nada é decidido sozinho — precisa arrastar até encostar numa borda.
+    expect(store.zones, isEmpty);
+    expect(find.byKey(const Key('device-box-pc-windows')), findsOneWidget);
+    expect(find.textContaining('arraste até encostar'), findsOneWidget);
   });
 
   testWidgets('remover dispositivo tira do canvas e do store',
       (tester) async {
     final store = HotZoneConfigStore();
+    store.add(const HotZoneConfig(
+      edge: HotZoneEdge.right,
+      targetDeviceId: 'pc-windows',
+      enabled: true,
+    ));
     await pumpScreen(tester, store);
 
-    await tester.tap(find.byKey(const Key('add-device-button')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-        find.byKey(const Key('device-id-field')), 'pc-windows');
-    await tester.tap(find.text('Adicionar'));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('device-box-pc-windows')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('remove-device-pc-windows')));
     await tester.pumpAndSettle();
