@@ -76,13 +76,19 @@ core/
 │   │                       # mouse+teclado (ver src/platform/<so>/)
 │   ├── protocol.h          # pacotes versionados trocados entre as 2 máquinas
 │   │                       # (ENTER/MOUSE_DELTA/MOUSE_BUTTON/KEY/LEAVE)
-│   ├── net_socket.h        # wrapper fino de socket UDP (BSD sockets/Winsock)
+│   ├── net_socket.h        # wrapper fino de socket UDP (BSD sockets/Winsock) —
+│   │                       # inclui receive_from (dá o IP de quem mandou) e
+│   │                       # enable_broadcast (aciona o prompt de permissão de
+│   │                       # Rede Local — só chamar a partir de ação do usuário)
 │   ├── pairing.h           # cadastro de dispositivos confiáveis (sobrevive a
 │   │                       # troca de IP), código de confirmação, token secreto,
 │   │                       # identidade estável da máquina local
 │   ├── discovery.h         # protocolo de "quem está aí" / "sou eu" por broadcast
 │   │                       # na rede local (não é mDNS/DNS-SD de verdade, ver nota
-│   │                       # em "Fluxo de Desenvolvimento")
+│   │                       # em "Fluxo de Desenvolvimento") + altcross_discovery_
+│   │                       # run_query, que já manda o broadcast de verdade e
+│   │                       # coleta respostas — é o binding FFI usado pela tela
+│   │                       # de Conexões (rodado numa isolate no lado Dart)
 │   └── displays.h          # enumeração dos monitores físicos reais da máquina —
 │                           # é o binding FFI que a tela de arranjo usa de verdade
 ├── src/                    # implementação (.c), um arquivo por módulo/domínio
@@ -130,19 +136,29 @@ compila no macOS; a versão Windows está escrita mas **nunca compilada nem test
 (sem máquina Windows nesta sessão). A enumeração de monitores físicos (`displays`) está
 implementada, compila no macOS e **já tem FFI real ligado na tela de arranjo**
 (`app/lib/screens/arrangement_screen.dart`), que mostra as telas físicas de verdade
-desta máquina. Falta ainda: (1) o broadcast de descoberta de verdade usando
-`net_socket` (hoje só o encode/decode das mensagens está testado — enviar de verdade
-dispara o prompt de permissão de Rede Local do macOS, por isso não é testado
-automaticamente); (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`) usando
-o código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos" na
-tela de arranjo são só nomes digitados manualmente, não pareados de verdade; (3) trocar
-a resolução de tela real do dispositivo remoto (hoje a tela de arranjo assume Full HD
-por padrão pra todo mundo, até o pareamento trocar essa informação de verdade); (4)
-rodar `altcrossd` de verdade end-to-end entre 2 máquinas reais. **Nunca ative o hook de
-captura (`altcross_platform_input_start`) automaticamente** — isso captura o
-mouse/teclado real de quem estiver rodando; só rodar manualmente, avisando antes. Já
-`list_displays`/`altcross_displays_enumerate` são seguros de rodar automaticamente
-(só leem os monitores, não capturam nada).
+desta máquina. A descoberta na rede (`discovery`) também já tem FFI real ligado na
+tela de Conexões (`app/lib/screens/connections_screen.dart`, botão "Buscar
+dispositivos" → `AltCrossNative.runDiscovery`, que roda numa isolate Dart pra não
+travar a UI enquanto espera resposta — ver "não trave a UI thread" nas Boas Práticas).
+**Limitação importante da descoberta**: só o lado que pergunta está pronto —
+`altcrossd` ainda não roda um respondedor que escuta `ALTCROSS_DISCOVERY_MSG_QUERY` e
+responde; então o botão só vai achar alguma coisa quando essa peça existir (ou entre 2
+processos que a gente rode manualmente pra testar). Falta ainda: (1) implementar esse
+respondedor no `altcrossd`; (2) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`)
+usando o código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos"
+tanto na tela de arranjo quanto os "encontrados" na tela de Conexões não são pareados de
+verdade (arranjo: nome digitado manualmente; conexões: dado bruto da resposta de
+descoberta, sem autenticação); (3) trocar a resolução de tela real do dispositivo remoto
+(hoje a tela de arranjo assume Full HD por padrão pra todo mundo, até o pareamento trocar
+essa informação de verdade); (4) rodar `altcrossd` de verdade end-to-end entre 2
+máquinas reais. **Nunca ative o hook de captura (`altcross_platform_input_start`)
+automaticamente** — isso captura o mouse/teclado real de quem estiver rodando; só rodar
+manualmente, avisando antes. Já `list_displays`/`altcross_displays_enumerate` são
+seguros de rodar automaticamente (só leem os monitores, não capturam nada); o broadcast
+de descoberta (`altcross_discovery_run_query`/`altcross_socket_enable_broadcast`) é
+seguro no sentido de não capturar nada, mas aciona o prompt de permissão de Rede Local
+do SO — só chamar a partir de uma ação explícita do usuário (o botão já faz isso certo),
+nunca automaticamente ao abrir a tela.
 
 Convenção ao adicionar um módulo novo (ex.: `clipboard`, `audio_mixer`, `input_inject`):
 um header em `include/altcross/<modulo>.h`, implementação em `src/<modulo>.c`, testes em
@@ -174,40 +190,54 @@ app/
 ├── lib/
 │   ├── main.dart           # monta o MaterialApp e a HotZoneConfigStore raiz
 │   ├── models/             # modelos de dados puros
-│   │   ├── hot_zone.dart          # equivalente Dart dos structs de hotzone do Core,
-│   │   │                          # com toJson/fromJson
-│   │   └── physical_display.dart  # equivalente Dart de altcross_display_t
+│   │   ├── hot_zone.dart           # equivalente Dart dos structs de hotzone do Core,
+│   │   │                           # com toJson/fromJson
+│   │   ├── physical_display.dart   # equivalente Dart de altcross_display_t
+│   │   └── discovered_device.dart  # dispositivo achado por AltCrossNative.runDiscovery
 │   ├── native/             # única pasta que fala dart:ffi com o Core — todo o resto
 │   │   └── altcross_native.dart   # do app passa por aqui, nunca `dart:ffi` direto
 │   │                               # em outro lugar. DynamicLibrary.open resolve o
 │   │                               # caminho do .dylib/.dll relativo ao executável.
+│   │                               # Chamadas bloqueantes (runDiscovery) rodam numa
+│   │                               # Isolate.run pra não travar a UI.
 │   ├── services/           # lógica pura de UI que não é estado nem modelo
-│   │   └── arrangement.dart  # geometria de "que borda esse retângulo está tocando"
-│   │                          # — usada pelo arrangement_screen, testável sem widget
+│   │   ├── arrangement.dart    # geometria de "que borda esse retângulo está tocando"
+│   │   │                       # — usada pelo arrangement_screen, testável sem widget
+│   │   └── hot_zone_labels.dart  # rótulo/ícone de cada borda em pt-BR — compartilhado
+│   │                              # entre arrangement_screen e connections_screen
 │   ├── state/              # lógica de estado/orquestração da UI (stores/notifiers),
 │   │   └── hot_zone_config_store.dart  # sem lógica de baixo nível — isso é do Core
 │   └── screens/            # telas — pequenas, delegam estado pra lib/state/
-│       └── arrangement_screen.dart  # tela de arranjo: mostra as telas físicas reais
-│                                     # (via native/) + dispositivos remotos
-│                                     # arrastáveis, grudando na borda mais próxima
+│       ├── home_screen.dart         # página inicial: cards de módulo (Arranjo,
+│       │                            # Conexões) — só navega, sem lógica própria
+│       ├── arrangement_screen.dart  # tela de arranjo: mostra as telas físicas reais
+│       │                            # (via native/) + dispositivos remotos
+│       │                            # arrastáveis, grudando na borda mais próxima
+│       └── connections_screen.dart  # mapeia as conexões já configuradas
+│                                     # (HotZoneConfigStore) + botão "Buscar
+│                                     # dispositivos" (descoberta real via native/)
 └── test/                   # testes com flutter_test, um arquivo por classe de lib/
     ├── widget_test.dart              # smoke test do AltCrossApp
     ├── hot_zone_config_store_test.dart
     ├── arrangement_test.dart         # testa a geometria pura de arrangement.dart
-    └── arrangement_screen_test.dart  # testa render/add/remove; arrastar de verdade
-                                       # (drag) não é testado automaticamente — a
-                                       # escala do canvas é dinâmica e recalculada a
-                                       # cada frame, o que torna simular um arrasto
-                                       # pixel-perfeito no teste frágil demais pro
-                                       # benefício; validar arrastando manualmente
+    ├── arrangement_screen_test.dart  # testa render/add/remove; arrastar de verdade
+    │                                  # (drag) não é testado automaticamente — a
+    │                                  # escala do canvas é dinâmica e recalculada a
+    │                                  # cada frame, o que torna simular um arrasto
+    │                                  # pixel-perfeito no teste frágil demais pro
+    │                                  # benefício; validar arrastando manualmente
+    ├── home_screen_test.dart
+    └── connections_screen_test.dart  # discoveryRunner sempre injetado nos testes —
+                                       # nunca dispara o broadcast/permissão de rede de
+                                       # verdade durante `flutter test`
 ```
 
 Convenção: cada arquivo em `lib/state/`, `lib/models/`, `lib/services/` ou `lib/screens/`
 tem seu par em `test/` com o mesmo nome + `_test.dart` (exceto `lib/native/`, que só
 compila com a lib nativa de verdade presente — ver limitação de teste acima). Telas
 ficam em `lib/screens/`, sempre pequenas e delegando estado para `lib/state/` (ver
-`arrangement_screen.dart` — a tela não decide regra de negócio, só chama
-`store.add/remove` e a geometria pura de `services/arrangement.dart`).
+`arrangement_screen.dart`/`connections_screen.dart` — a tela não decide regra de
+negócio, só chama `store.add/remove` e a geometria/rótulos de `lib/services/`).
 
 Build e testes:
 
