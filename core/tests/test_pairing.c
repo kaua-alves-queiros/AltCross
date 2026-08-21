@@ -97,7 +97,8 @@ static void test_save_and_load_round_trip(void) {
     altcross_pairing_store_upsert(&store, "device-2", "Windows Gamer",
                                    "def456secret", "192.168.0.20", 45200);
 
-    const char *path = "/tmp/altcross_test_pairing_store.txt";
+    /* caminho relativo à pasta atual: /tmp não existe no Windows */
+    const char *path = "altcross_test_pairing_store.txt";
     int save_rc = altcross_pairing_store_save(&store, path);
     ASSERT_EQ(0, save_rc);
 
@@ -125,7 +126,7 @@ static void test_load_missing_file_returns_error_without_crashing(void) {
     altcross_pairing_store_t store;
     altcross_pairing_store_init(&store);
     int rc =
-        altcross_pairing_store_load(&store, "/tmp/altcross_never_exists.txt");
+        altcross_pairing_store_load(&store, "altcross_never_exists.txt");
     ASSERT_TRUE(rc != 0);
     ASSERT_EQ(0, store.count);
 }
@@ -158,7 +159,7 @@ static void test_generate_secret_is_not_always_the_same(void) {
 }
 
 static void test_local_identity_creates_and_persists(void) {
-    const char *path = "/tmp/altcross_test_identity.txt";
+    const char *path = "altcross_test_identity.txt";
     remove(path);
 
     char id_first[ALTCROSS_DEVICE_ID_SIZE];
