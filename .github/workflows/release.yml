@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Dart
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache CMake
+        uses: actions/cache@v4
+        with:
+          path: |
+            core/build
+            ~/.cache/cmake
+          key: ${{ runner.os }}-cmake-${{ hashFiles('core/CMakeLists.txt') }}
+
+      - name: Build Core (macOS)
+        run: |
+          cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build core/build --config Release
+
+      - name: Build App (macOS)
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build macos --release
+
+      - name: Build Core (Windows)
+        run: |
+          cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022"
+          cmake --build core/build --config Release
+
+      - name: Build App (Windows)
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "Release v${{ github.run_number }}"
+          body: |
+            ## What's changed
+
+            Automated release from CI.
+
+            ## Artifacts
+
+            - **macOS**: App bundle built with Flutter
+            - **Windows**: App executable built with Flutter
+            - **Core**: C library for altcross
+          files: |
+            app/build/macos/Release-flutter/app.dSYM
+            app/build/windows/runner/Release/altcross_core.exe
+            core/build/Release/libaltcross_core.dylib
+            core/build/Release/altcross_core_tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
