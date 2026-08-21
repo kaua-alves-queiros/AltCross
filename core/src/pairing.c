@@ -163,6 +163,25 @@ void altcross_pairing_generate_secret(char out_secret[ALTCROSS_SECRET_SIZE]) {
     bytes_to_hex(bytes, sizeof(bytes), out_secret);
 }
 
+int altcross_pairing_lookup_host(const char *device_id,
+                                  const char *store_path, char *out_host,
+                                  size_t out_host_size, int *out_port) {
+    altcross_pairing_store_t store;
+    if (altcross_pairing_store_load(&store, store_path) != 0) {
+        return 1;
+    }
+    const altcross_trusted_device_t *found =
+        altcross_pairing_store_find(&store, device_id);
+    if (!found) {
+        return 1;
+    }
+    snprintf(out_host, out_host_size, "%s", found->last_host);
+    if (out_port) {
+        *out_port = found->last_port;
+    }
+    return 0;
+}
+
 int altcross_pairing_local_identity_load_or_create(
     const char *path, char out_device_id[ALTCROSS_DEVICE_ID_SIZE]) {
     FILE *f = fopen(path, "r");

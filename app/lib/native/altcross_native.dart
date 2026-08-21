@@ -6,8 +6,10 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 
 import '../models/discovered_device.dart';
+import '../models/hot_zone.dart';
 import '../models/pairing.dart';
 import '../models/physical_display.dart';
+import '../models/screen_sync.dart';
 
 /// Espelha `altcross_display_t` de core/include/altcross/displays.h — os
 /// campos e a ordem têm que bater exatamente com o struct em C.
@@ -117,6 +119,50 @@ typedef _ConfirmPairingDart = int Function(
     Pointer<Utf8> storePath,
     Pointer<Uint8> outDeviceId,
     Pointer<Uint8> outName);
+
+typedef _StartScreenSyncResponderNative = Int32 Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name);
+typedef _StartScreenSyncResponderDart = int Function(
+    Pointer<Utf8> deviceId, Pointer<Utf8> name);
+
+typedef _QueryScreensNative = Int32 Function(Pointer<Utf8> peerHost,
+    Int32 timeoutMs, Pointer<_NativeDisplay> out, Int32 maxCount);
+typedef _QueryScreensDart = int Function(Pointer<Utf8> peerHost,
+    int timeoutMs, Pointer<_NativeDisplay> out, int maxCount);
+
+typedef _PushZoneNative = Int32 Function(Pointer<Utf8> peerHost,
+    Pointer<Utf8> myDeviceId, Pointer<Utf8> myName, Int32 myEdge,
+    Int32 targetScreenIndex);
+typedef _PushZoneDart = int Function(Pointer<Utf8> peerHost,
+    Pointer<Utf8> myDeviceId, Pointer<Utf8> myName, int myEdge,
+    int targetScreenIndex);
+
+/// Espelha `altcross_screen_sync_incoming_zone_t` de
+/// core/include/altcross/screen_sync_protocol.h.
+final class _NativeIncomingZone extends Struct {
+  @Int32()
+  external int pending;
+  @Array(33)
+  external Array<Uint8> senderDeviceId;
+  @Array(64)
+  external Array<Uint8> senderName;
+  @Int32()
+  external int senderEdge;
+  @Int32()
+  external int senderTargetScreenIndex;
+}
+
+typedef _PollIncomingZoneNative = Int32 Function(
+    Pointer<_NativeIncomingZone> out);
+typedef _PollIncomingZoneDart = int Function(
+    Pointer<_NativeIncomingZone> out);
+
+typedef _LookupHostNative = Int32 Function(Pointer<Utf8> deviceId,
+    Pointer<Utf8> storePath, Pointer<Uint8> outHost, Int32 outHostSize,
+    Pointer<Int32> outPort);
+typedef _LookupHostDart = int Function(Pointer<Utf8> deviceId,
+    Pointer<Utf8> storePath, Pointer<Uint8> outHost, int outHostSize,
+    Pointer<Int32> outPort);
 
 const int _maxDisplays = 16;
 
@@ -494,5 +540,167 @@ class AltCrossNative {
       bytes.add(byte);
     }
     return utf8.decode(bytes);
+  }
+
+  static bool _screenSyncResponderStarted = false;
+
+  /// Sobe o respondedor de sincronização de telas (ver
+  /// `altcross_screen_sync_start_responder`): a partir daqui, esta máquina
+  /// responde de verdade quando outro dispositivo pareado pergunta quais
+  /// são as telas físicas reais dela (`queryPeerScreens`) ou avisa que
+  /// conectou uma borda numa delas (`pushZoneToPeer`/`pollIncomingZone`).
+  /// Seguro de ligar automaticamente — só responde perguntas explícitas,
+  /// não captura input nenhum. Idempotente.
+  static void startScreenSyncResponder({required String name}) {
+    if (_screenSyncResponderStarted) {
+      return;
+    }
+    final start = _library()
+        .lookup<NativeFunction<_StartScreenSyncResponderNative>>(
+            'altcross_screen_sync_start_responder')
+        .asFunction<_StartScreenSyncResponderDart>();
+
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final nameNative = name.toNativeUtf8();
+    try {
+      final rc = start(deviceIdNative, nameNative);
+      _screenSyncResponderStarted = rc == 0;
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(nameNative);
+    }
+  }
+
+  /// Pergunta pra peerHost quais são as telas físicas reais dele AGORA —
+  /// nunca um tamanho chutado (ver AGENTS.md: a tela de Arranjo não deve
+  /// inventar resolução pra dispositivo remoto). Roda numa isolate pra não
+  /// travar a UI enquanto espera a resposta pela rede; retorna lista vazia
+  /// se não respondeu a tempo (offline/inalcançável) — quem chama decide
+  /// como mostrar isso, não finge um valor.
+  static Future<List<PhysicalDisplay>> queryPeerScreens({
+    required String peerHost,
+    int timeoutMs = 3000,
+  }) {
+    return Isolate.run(() => _queryPeerScreensSync(peerHost, timeoutMs));
+  }
+
+  static List<PhysicalDisplay> _queryPeerScreensSync(
+      String peerHost, int timeoutMs) {
+    final query = _library()
+        .lookup<NativeFunction<_QueryScreensNative>>(
+            'altcross_screen_sync_query_screens')
+        .asFunction<_QueryScreensDart>();
+
+    final hostNative = peerHost.toNativeUtf8();
+    final buffer = calloc<_NativeDisplay>(_maxDisplays);
+    try {
+      final total = query(hostNative, timeoutMs, buffer, _maxDisplays);
+      if (total <= 0) {
+        return const [];
+      }
+      final count = total < _maxDisplays ? total : _maxDisplays;
+      return [
+        for (var i = 0; i < count; i++)
+          PhysicalDisplay(
+            x: buffer[i].x,
+            y: buffer[i].y,
+            width: buffer[i].width,
+            height: buffer[i].height,
+            isPrimary: buffer[i].isPrimary != 0,
+          ),
+      ];
+    } finally {
+      calloc.free(hostNative);
+      calloc.free(buffer);
+    }
+  }
+
+  /// Avisa peerHost que EU acabei de conectar minha borda `myEdge` numa das
+  /// telas dele (`targetScreenIndex`, na ordem que `queryPeerScreens`
+  /// devolveu) — é isso que sincroniza o arranjo nos 2 lados sem cada host
+  /// precisar configurar a mesma ligação manualmente. Não espera resposta;
+  /// retorna true se conseguiu mandar o pacote.
+  static bool pushZoneToPeer({
+    required String peerHost,
+    required String myName,
+    required HotZoneEdge myEdge,
+    required int targetScreenIndex,
+  }) {
+    final push = _library()
+        .lookup<NativeFunction<_PushZoneNative>>(
+            'altcross_screen_sync_push_zone')
+        .asFunction<_PushZoneDart>();
+
+    final hostNative = peerHost.toNativeUtf8();
+    final deviceIdNative = localDeviceId().toNativeUtf8();
+    final nameNative = myName.toNativeUtf8();
+    try {
+      return push(hostNative, deviceIdNative, nameNative, myEdge.index,
+              targetScreenIndex) ==
+          0;
+    } finally {
+      calloc.free(hostNative);
+      calloc.free(deviceIdNative);
+      calloc.free(nameNative);
+    }
+  }
+
+  /// Consome (se houver) uma notificação de que outro dispositivo pareado
+  /// conectou a borda dele numa das minhas telas. Retorna null se não há
+  /// nenhuma pendente agora.
+  static IncomingZonePush? pollIncomingZone() {
+    final poll = _library()
+        .lookup<NativeFunction<_PollIncomingZoneNative>>(
+            'altcross_screen_sync_poll_incoming_zone')
+        .asFunction<_PollIncomingZoneDart>();
+
+    final out = calloc<_NativeIncomingZone>();
+    try {
+      final found = poll(out);
+      if (found == 0) {
+        return null;
+      }
+      final edgeIndex = out.ref.senderEdge;
+      final edge = edgeIndex >= 0 && edgeIndex < HotZoneEdge.values.length
+          ? HotZoneEdge.values[edgeIndex]
+          : HotZoneEdge.none;
+      return IncomingZonePush(
+        senderDeviceId: _readFixedArray(out.ref.senderDeviceId, _deviceIdSize),
+        senderName: _readFixedArray(out.ref.senderName, _deviceNameSize),
+        senderEdge: edge,
+        senderTargetScreenIndex: out.ref.senderTargetScreenIndex,
+      );
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// Último endereço de rede conhecido de um dispositivo já pareado (ver
+  /// `altcross_pairing_lookup_host`) — é pra onde `queryPeerScreens`/
+  /// `pushZoneToPeer` mandam a pergunta/aviso. Retorna null se esse
+  /// dispositivo nunca foi pareado (nada cadastrado pra ele).
+  static String? lookupTrustedHost(String deviceId) {
+    final lookup = _library()
+        .lookup<NativeFunction<_LookupHostNative>>(
+            'altcross_pairing_lookup_host')
+        .asFunction<_LookupHostDart>();
+
+    final deviceIdNative = deviceId.toNativeUtf8();
+    final storePathNative = _pairingStorePath().toNativeUtf8();
+    final outHost = calloc<Uint8>(_hostSize);
+    final outPort = calloc<Int32>();
+    try {
+      final rc = lookup(deviceIdNative, storePathNative, outHost, _hostSize,
+          outPort);
+      if (rc != 0) {
+        return null;
+      }
+      return _readFixedString(outHost, 0, _hostSize);
+    } finally {
+      calloc.free(deviceIdNative);
+      calloc.free(storePathNative);
+      calloc.free(outHost);
+      calloc.free(outPort);
+    }
   }
 }

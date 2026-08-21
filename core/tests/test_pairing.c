@@ -131,6 +131,43 @@ static void test_load_missing_file_returns_error_without_crashing(void) {
     ASSERT_EQ(0, store.count);
 }
 
+static void test_lookup_host_finds_last_known_address(void) {
+    altcross_pairing_store_t store;
+    altcross_pairing_store_init(&store);
+    altcross_pairing_store_upsert(&store, "device-1", "PC do Kauã",
+                                   "abc123secret", "192.168.0.10", 45100);
+
+    const char *path = "altcross_test_pairing_lookup_host.txt";
+    ASSERT_EQ(0, altcross_pairing_store_save(&store, path));
+
+    char host[ALTCROSS_HOST_SIZE];
+    int port = 0;
+    int rc = altcross_pairing_lookup_host("device-1", path, host,
+                                           sizeof(host), &port);
+    ASSERT_EQ(0, rc);
+    ASSERT_EQ(0, strcmp("192.168.0.10", host));
+    ASSERT_EQ(45100, port);
+
+    remove(path);
+}
+
+static void test_lookup_host_fails_for_unknown_device(void) {
+    altcross_pairing_store_t store;
+    altcross_pairing_store_init(&store);
+    altcross_pairing_store_upsert(&store, "device-1", "PC do Kauã",
+                                   "abc123secret", "192.168.0.10", 45100);
+
+    const char *path = "altcross_test_pairing_lookup_host_2.txt";
+    ASSERT_EQ(0, altcross_pairing_store_save(&store, path));
+
+    char host[ALTCROSS_HOST_SIZE];
+    int rc = altcross_pairing_lookup_host("device-nunca-pareado", path, host,
+                                           sizeof(host), NULL);
+    ASSERT_TRUE(rc != 0);
+
+    remove(path);
+}
+
 static void test_generate_code_is_always_six_digits(void) {
     for (int i = 0; i < 200; i++) {
         int code = altcross_pairing_generate_code();
@@ -186,6 +223,8 @@ void run_pairing_tests(void) {
     RUN_TEST(test_remove_deletes_device);
     RUN_TEST(test_save_and_load_round_trip);
     RUN_TEST(test_load_missing_file_returns_error_without_crashing);
+    RUN_TEST(test_lookup_host_finds_last_known_address);
+    RUN_TEST(test_lookup_host_fails_for_unknown_device);
     RUN_TEST(test_generate_code_is_always_six_digits);
     RUN_TEST(test_generate_secret_is_64_hex_chars);
     RUN_TEST(test_generate_secret_is_not_always_the_same);

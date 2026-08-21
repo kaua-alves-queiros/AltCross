@@ -1,6 +1,8 @@
 #ifndef ALTCROSS_PAIRING_H
 #define ALTCROSS_PAIRING_H
 
+#include <stddef.h>
+
 #include "altcross/export.h"
 
 #define ALTCROSS_DEVICE_ID_SIZE 33  /* 32 hex chars + '\0' */
@@ -61,6 +63,18 @@ ALTCROSS_API int altcross_pairing_store_save(
     const altcross_pairing_store_t *store, const char *path);
 ALTCROSS_API int altcross_pairing_store_load(altcross_pairing_store_t *store,
                                               const char *path);
+
+/* Atalho pra quem só quer o último endereço conhecido de um dispositivo já
+ * pareado, sem lidar com o store inteiro (carrega de path, procura
+ * device_id) — é o que permite a tela de Arranjo perguntar as telas reais
+ * de um dispositivo (ver screen_sync_protocol.h) sabendo pra onde mandar a
+ * pergunta. Retorna 0 e preenche out_host/out_port em sucesso, diferente de
+ * zero se o arquivo não existir ou device_id não estiver cadastrado. */
+ALTCROSS_API int altcross_pairing_lookup_host(const char *device_id,
+                                               const char *store_path,
+                                               char *out_host,
+                                               size_t out_host_size,
+                                               int *out_port);
 
 /* Código de confirmação de 6 dígitos (100000-999999) mostrado em quem RECEBE
  * o pedido de pareamento; quem pede precisa informar o mesmo código de

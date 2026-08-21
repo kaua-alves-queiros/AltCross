@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/hot_zone.dart';
@@ -6,12 +8,23 @@ import '../native/altcross_native.dart';
 import '../services/screen_connections.dart';
 import '../state/hot_zone_config_store.dart';
 
-/// Tamanho padrão dado a um dispositivo remoto recém-adicionado, até o
-/// pareamento de verdade trocar a resolução real da tela dele (ver
-/// "Status da funcionalidade" no AGENTS.md — pareamento ainda não manda essa
-/// informação). Usa uma resolução comum (Full HD) só pra ficar em escala
-/// parecida com telas físicas de verdade no canvas.
-const _defaultRemoteSize = Size(1920, 1080);
+typedef LookupTrustedHost = String? Function(String deviceId);
+typedef QueryPeerScreens = Future<List<PhysicalDisplay>> Function(
+    String peerHost);
+typedef PushZoneToPeer = bool Function({
+  required String peerHost,
+  required String myName,
+  required HotZoneEdge myEdge,
+  required int targetScreenIndex,
+});
+
+/// Tamanho só de ENQUANTO a tela real de um dispositivo remoto ainda não foi
+/// confirmada pela rede (carregando, nunca pareado, ou offline agora) — o
+/// label do box sempre deixa claro qual desses 3 casos é, nunca finge que
+/// esse número é a resolução real dele (ver AGENTS.md: nada de chutar
+/// resolução — a tela de arranjo tem que buscar de verdade via
+/// `AltCrossNative.queryPeerScreens`/screen_sync_protocol.h).
+const _unknownRemoteSize = Size(420, 260);
 const _edgeGap = 160.0;
 const _canvasMargin = 240.0;
 const _edgeHotspotThickness = 18.0;
@@ -40,10 +53,10 @@ const _clickableEdges = [
 /// As duas são igualmente arrastáveis: o usuário organiza tudo do jeito que
 /// quiser, tanto as telas dos outros hosts quanto as próprias.
 class _ScreenBox {
-  final String label;
+  String label;
   final String? deviceId; // null = tela física local, não removível
   Offset position;
-  final Size size;
+  Size size;
 
   _ScreenBox({
     required this.label,
@@ -99,12 +112,22 @@ class _PendingSelection {
 class ArrangementScreen extends StatefulWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function() displayProvider;
+  final LookupTrustedHost lookupHost;
+  final QueryPeerScreens queryPeerScreens;
+  final PushZoneToPeer pushZoneToPeer;
 
-  const ArrangementScreen({
+  ArrangementScreen({
     super.key,
     required this.store,
     List<PhysicalDisplay> Function()? displayProvider,
-  }) : displayProvider = displayProvider ?? AltCrossNative.enumerateDisplays;
+    LookupTrustedHost? lookupHost,
+    QueryPeerScreens? queryPeerScreens,
+    PushZoneToPeer? pushZoneToPeer,
+  })  : displayProvider = displayProvider ?? AltCrossNative.enumerateDisplays,
+        lookupHost = lookupHost ?? AltCrossNative.lookupTrustedHost,
+        queryPeerScreens = queryPeerScreens ??
+            ((host) => AltCrossNative.queryPeerScreens(peerHost: host)),
+        pushZoneToPeer = pushZoneToPeer ?? AltCrossNative.pushZoneToPeer;
 
   @override
   State<ArrangementScreen> createState() => _ArrangementScreenState();
@@ -135,14 +158,27 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
         size: Size(display.width, display.height),
       ));
     }
+    final seenDeviceIds = <String>{};
     for (final zone in widget.store.zones) {
-      final remoteBox = _ScreenBox(
-        deviceId: zone.targetDeviceId,
-        label: zone.targetDeviceId,
-        position: _anchorFor(zone.edge, _defaultRemoteSize),
-        size: _defaultRemoteSize,
-      );
-      _remoteBoxes.add(remoteBox);
+      final firstBoxForDevice = seenDeviceIds.add(zone.targetDeviceId);
+      final remoteBox = firstBoxForDevice
+          ? _ScreenBox(
+              deviceId: zone.targetDeviceId,
+              label: '${zone.targetDeviceId}\ncarregando tela real…',
+              position: _anchorFor(zone.edge, _unknownRemoteSize),
+              size: _unknownRemoteSize,
+            )
+          : _remoteBoxes.firstWhere((b) => b.deviceId == zone.targetDeviceId);
+      if (firstBoxForDevice) {
+        _remoteBoxes.add(remoteBox);
+        // Adiado pro pós-frame — chamar setState (dentro de
+        // _fetchRealScreens) de forma síncrona ainda dentro de initState
+        // bate no assert "setState() or markNeedsBuild() called during
+        // build" do Flutter, já que o framework considera montagem+build
+        // do elemento uma coisa só.
+        WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _fetchRealScreens(zone.targetDeviceId));
+      }
       final localBox = _firstLocalBoxForOuterEdge(zone.edge);
       if (localBox != null) {
         _connections.add(_Connection(
@@ -152,6 +188,51 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
           edgeB: oppositeEdge(zone.edge),
           color: _nextColor(),
         ));
+      }
+    }
+  }
+
+  /// Busca de verdade, pela rede, as telas físicas atuais de um dispositivo
+  /// já pareado (nunca um tamanho chutado) — atualiza o box quando a
+  /// resposta chega, ou deixa claro no label quando não dá (nunca pareado /
+  /// offline agora) em vez de fingir uma resolução.
+  Future<void> _fetchRealScreens(String deviceId) async {
+    final host = widget.lookupHost(deviceId);
+    if (host == null) {
+      if (!mounted) return;
+      setState(() => _relabelRemoteBox(
+          deviceId, '$deviceId\n(nunca pareado — sem tela real conhecida)'));
+      return;
+    }
+
+    final displays = await widget.queryPeerScreens(host);
+    if (!mounted) return;
+    if (displays.isEmpty) {
+      setState(() => _relabelRemoteBox(
+          deviceId, '$deviceId\n(offline agora — tela real desconhecida)'));
+      return;
+    }
+
+    setState(() {
+      final box = _remoteBoxes.firstWhere((b) => b.deviceId == deviceId,
+          orElse: () => _ScreenBox(
+              deviceId: deviceId, label: deviceId, position: Offset.zero, size: _unknownRemoteSize));
+      var bounds = displays.first.rect;
+      for (final d in displays.skip(1)) {
+        bounds = bounds.expandToInclude(d.rect);
+      }
+      box.size = bounds.size;
+      box.label = displays.length > 1
+          ? '$deviceId\n${bounds.width.round()}×${bounds.height.round()}'
+              ' · ${displays.length} telas'
+          : '$deviceId\n${bounds.width.round()}×${bounds.height.round()}';
+    });
+  }
+
+  void _relabelRemoteBox(String deviceId, String label) {
+    for (final box in _remoteBoxes) {
+      if (box.deviceId == deviceId) {
+        box.label = label;
       }
     }
   }
@@ -261,9 +342,9 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
         _remoteBoxes.length * 700.0, _remoteBoxes.length * 700.0);
     final box = _ScreenBox(
       deviceId: deviceId,
-      label: deviceId,
-      position: _anchorFor(HotZoneEdge.none, _defaultRemoteSize) + cascade,
-      size: _defaultRemoteSize,
+      label: '$deviceId\n(nunca pareado — sem tela real conhecida)',
+      position: _anchorFor(HotZoneEdge.none, _unknownRemoteSize) + cascade,
+      size: _unknownRemoteSize,
     );
     setState(() {
       _remoteBoxes.add(box);
@@ -325,9 +406,29 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       ));
       _message = null;
       _replaceConnection(localBox, localEdge, remoteBox, remoteEdge);
+      _pushZoneIfPaired(remoteBox.deviceId!, localEdge);
     } on StateError catch (e) {
       _message = e.message;
     }
+  }
+
+  /// Avisa o dispositivo remoto de verdade, pela rede, que acabei de
+  /// conectar minha borda nele — é isso que sincroniza o arranjo nos 2
+  /// lados (ver screen_sync_protocol.h/pollIncomingZone) em vez de cada
+  /// host precisar configurar a mesma ligação manualmente 2 vezes. Sem
+  /// host conhecido (dispositivo nunca pareado, só digitado manualmente)
+  /// não tem pra onde mandar — fica só configurado deste lado mesmo.
+  void _pushZoneIfPaired(String deviceId, HotZoneEdge localEdge) {
+    final host = widget.lookupHost(deviceId);
+    if (host == null) {
+      return;
+    }
+    widget.pushZoneToPeer(
+      peerHost: host,
+      myName: Platform.localHostname,
+      myEdge: localEdge,
+      targetScreenIndex: 0,
+    );
   }
 
   void _replaceConnection(
