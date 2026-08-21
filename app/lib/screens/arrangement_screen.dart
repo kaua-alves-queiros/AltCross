@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/hot_zone.dart';
 import '../models/physical_display.dart';
 import '../native/altcross_native.dart';
-import '../services/arrangement.dart';
+import '../services/screen_connections.dart';
 import '../state/hot_zone_config_store.dart';
 
 /// Tamanho padrão dado a um dispositivo remoto recém-adicionado, até o
@@ -14,6 +14,8 @@ import '../state/hot_zone_config_store.dart';
 const _defaultRemoteSize = Size(1920, 1080);
 const _edgeGap = 160.0;
 const _canvasMargin = 240.0;
+const _edgeHotspotThickness = 18.0;
+const _highlightThickness = 10.0;
 
 /// Fundo escuro fixo do canvas de arranjo — de propósito independente do
 /// tema claro/escuro do resto do app (ver Ajustes): é uma metáfora visual
@@ -22,31 +24,78 @@ const _canvasMargin = 240.0;
 /// muda com o tema do sistema.
 const _canvasBg = Color(0xFF0E1226);
 
-/// Cores de destaque da borda de conexão entre 2 telas — alternam por
-/// dispositivo, reaproveitando a paleta da marca (ver lib/theme/app_theme.dart)
-/// em vez de cores genéricas, mas mantendo o efeito "linha acesa" do painel
-/// nativo.
+/// Cores de destaque de conexão — uma por par conectado, reaproveitando a
+/// paleta da marca (ver lib/theme/app_theme.dart) em vez de cores genéricas.
 const _connectionColors = [Color(0xFF2BE5CC), Color(0xFF9385F5), Color(0xFFFFB86B)];
+const _pendingColor = Color(0xFFFFFFFF);
 
-class _DeviceBox {
-  final String deviceId;
+const _clickableEdges = [
+  HotZoneEdge.top,
+  HotZoneEdge.bottom,
+  HotZoneEdge.left,
+  HotZoneEdge.right,
+];
+
+/// Uma tela no canvas — física desta máquina ou de um dispositivo remoto.
+/// As duas são igualmente arrastáveis: o usuário organiza tudo do jeito que
+/// quiser, tanto as telas dos outros hosts quanto as próprias.
+class _ScreenBox {
+  final String label;
+  final String? deviceId; // null = tela física local, não removível
   Offset position;
   final Size size;
 
-  _DeviceBox({
-    required this.deviceId,
+  _ScreenBox({
+    required this.label,
     required this.position,
     required this.size,
+    this.deviceId,
   });
 
+  bool get isLocal => deviceId == null;
   Rect get rect => position & size;
+}
+
+/// Uma conexão de verdade entre a borda de uma tela e a borda de outra —
+/// é isso (não proximidade/arrasto) que define por onde o mouse passa de
+/// uma pra outra. Quando uma das duas é uma tela local, vira uma
+/// `HotZoneConfig` no store; entre 2 telas locais é só visual.
+class _Connection {
+  final _ScreenBox boxA;
+  final HotZoneEdge edgeA;
+  final _ScreenBox boxB;
+  final HotZoneEdge edgeB;
+  final Color color;
+
+  _Connection({
+    required this.boxA,
+    required this.edgeA,
+    required this.boxB,
+    required this.edgeB,
+    required this.color,
+  });
+
+  bool uses(_ScreenBox box, HotZoneEdge edge) =>
+      (identical(boxA, box) && edgeA == edge) ||
+      (identical(boxB, box) && edgeB == edge);
+
+  bool references(_ScreenBox box) => identical(boxA, box) || identical(boxB, box);
+}
+
+class _PendingSelection {
+  final _ScreenBox box;
+  final HotZoneEdge edge;
+
+  _PendingSelection({required this.box, required this.edge});
 }
 
 /// Tela de arranjo de monitores: mostra as telas físicas reais desta máquina
 /// (via Core em C, `AltCrossNative.enumerateDisplays`) e as dos dispositivos
-/// já configurados. Tudo é posicionado **manualmente**, arrastando — igual o
-/// painel de Arranjo de Monitores nativo do macOS/Windows: nada gruda numa
-/// borda sozinho, é o usuário que decide onde cada tela fica ao arrastar.
+/// já configurados. Arrastar organiza a posição (tanto telas locais quanto
+/// remotas, do jeito que o usuário quiser); quem define de fato por onde o
+/// mouse passa de uma tela pra outra é tocar numa borda e depois na borda da
+/// outra tela — igual escolher manualmente no painel nativo, sem depender de
+/// arrasto impreciso "encostando" sozinho.
 class ArrangementScreen extends StatefulWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function() displayProvider;
@@ -62,68 +111,105 @@ class ArrangementScreen extends StatefulWidget {
 }
 
 class _ArrangementScreenState extends State<ArrangementScreen> {
-  late final List<PhysicalDisplay> _localDisplays;
-  late final Rect _localBounds;
-  final List<_DeviceBox> _boxes = [];
+  final List<_ScreenBox> _localBoxes = [];
+  final List<_ScreenBox> _remoteBoxes = [];
+  final List<_Connection> _connections = [];
+  _PendingSelection? _pendingSelection;
   String? _message;
+
+  // Zoom/enquadramento travado durante um arraste — sem isso, mover uma
+  // tela muda o retângulo total, que muda a escala, e todas as telas
+  // parecem se mexer sozinhas.
+  Rect? _frozenTotalBounds;
+  double? _frozenScale;
 
   @override
   void initState() {
     super.initState();
-    _localDisplays = widget.displayProvider();
-    _localBounds = _boundsOf(_localDisplays);
+    for (final display in widget.displayProvider()) {
+      _localBoxes.add(_ScreenBox(
+        label: display.isPrimary
+            ? '${display.width.round()}×${display.height.round()}\nprincipal'
+            : '${display.width.round()}×${display.height.round()}',
+        position: Offset(display.x, display.y),
+        size: Size(display.width, display.height),
+      ));
+    }
     for (final zone in widget.store.zones) {
-      _boxes.add(_DeviceBox(
+      final remoteBox = _ScreenBox(
         deviceId: zone.targetDeviceId,
+        label: zone.targetDeviceId,
         position: _anchorFor(zone.edge, _defaultRemoteSize),
         size: _defaultRemoteSize,
-      ));
+      );
+      _remoteBoxes.add(remoteBox);
+      final localBox = _firstLocalBoxForOuterEdge(zone.edge);
+      if (localBox != null) {
+        _connections.add(_Connection(
+          boxA: localBox,
+          edgeA: zone.edge,
+          boxB: remoteBox,
+          edgeB: oppositeEdge(zone.edge),
+          color: _nextColor(),
+        ));
+      }
     }
   }
 
-  static Rect _boundsOf(List<PhysicalDisplay> displays) {
-    if (displays.isEmpty) {
+  /// A "tela local" pra fins de hotzone é o retângulo que engloba todos os
+  /// seus monitores físicos — reflete a posição atual deles, então arrastar
+  /// um monitor local também move essa referência (ver Core:
+  /// altcross_screen_config_t só conhece uma tela local combinada por vez).
+  Rect get _localBounds {
+    if (_localBoxes.isEmpty) {
       return Rect.zero;
     }
-    var rect = displays.first.rect;
-    for (final display in displays.skip(1)) {
-      rect = rect.expandToInclude(display.rect);
+    var rect = _localBoxes.first.rect;
+    for (final box in _localBoxes.skip(1)) {
+      rect = rect.expandToInclude(box.rect);
     }
     return rect;
   }
 
-  /// Só usado pra posicionar uma zona já salva (de uma sessão anterior) num
-  /// lugar plausível ao reabrir a tela — não é usado mais como "encaixe
-  /// automático" ao adicionar um dispositivo novo (isso agora é sempre
-  /// manual, ver `_placeNewDevice`).
+  _ScreenBox? _firstLocalBoxForOuterEdge(HotZoneEdge edge) {
+    for (final box in _localBoxes) {
+      if (isOuterEdge(box.rect, _localBounds, edge)) {
+        return box;
+      }
+    }
+    return null;
+  }
+
+  Color _nextColor() => _connectionColors[_connections.length % _connectionColors.length];
+
+  /// Só usado pra posicionar uma zona já salva (de uma sessão anterior) ou
+  /// um dispositivo novo num lugar plausível no canvas — não define nada
+  /// sozinho. É tocar nas bordas que conecta de verdade (ver `_onEdgeTapped`).
   Offset _anchorFor(HotZoneEdge edge, Size size) {
+    final bounds = _localBounds;
     switch (edge) {
       case HotZoneEdge.right:
-        return Offset(_localBounds.right + _edgeGap,
-            _localBounds.center.dy - size.height / 2);
+        return Offset(
+            bounds.right + _edgeGap, bounds.center.dy - size.height / 2);
       case HotZoneEdge.left:
-        return Offset(_localBounds.left - _edgeGap - size.width,
-            _localBounds.center.dy - size.height / 2);
+        return Offset(bounds.left - _edgeGap - size.width,
+            bounds.center.dy - size.height / 2);
       case HotZoneEdge.top:
-        return Offset(_localBounds.center.dx - size.width / 2,
-            _localBounds.top - _edgeGap - size.height);
+        return Offset(
+            bounds.center.dx - size.width / 2, bounds.top - _edgeGap - size.height);
       case HotZoneEdge.bottom:
-        return Offset(
-            _localBounds.center.dx - size.width / 2, _localBounds.bottom + _edgeGap);
+        return Offset(bounds.center.dx - size.width / 2, bounds.bottom + _edgeGap);
       case HotZoneEdge.topLeft:
-        return Offset(_localBounds.left - _edgeGap - size.width,
-            _localBounds.top - _edgeGap - size.height);
+        return Offset(bounds.left - _edgeGap - size.width,
+            bounds.top - _edgeGap - size.height);
       case HotZoneEdge.topRight:
-        return Offset(
-            _localBounds.right + _edgeGap, _localBounds.top - _edgeGap - size.height);
+        return Offset(bounds.right + _edgeGap, bounds.top - _edgeGap - size.height);
       case HotZoneEdge.bottomLeft:
-        return Offset(
-            _localBounds.left - _edgeGap - size.width, _localBounds.bottom + _edgeGap);
+        return Offset(bounds.left - _edgeGap - size.width, bounds.bottom + _edgeGap);
       case HotZoneEdge.bottomRight:
-        return Offset(_localBounds.right + _edgeGap, _localBounds.bottom + _edgeGap);
+        return Offset(bounds.right + _edgeGap, bounds.bottom + _edgeGap);
       case HotZoneEdge.none:
-        return Offset(
-            _localBounds.right + _edgeGap * 2, _localBounds.bottom + _edgeGap * 2);
+        return Offset(bounds.right + _edgeGap * 2, bounds.bottom + _edgeGap * 2);
     }
   }
 
@@ -165,52 +251,107 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
     );
   }
 
-  /// Um dispositivo novo sempre aparece flutuando, sem tocar em nenhuma
-  /// borda — nada é decidido por padrão. É arrastando até encostar numa
-  /// borda das suas telas que o usuário define a hotzone, igual no painel
-  /// nativo do macOS/Windows.
+  /// Um dispositivo novo sempre aparece flutuando — nada é decidido por
+  /// padrão. É tocando numa borda de uma tela local e depois numa borda
+  /// dele que o usuário conecta de fato.
   void _placeNewDevice(String deviceId) {
-    final box = _DeviceBox(
+    // cada dispositivo novo cai um pouco deslocado do anterior, senão todo
+    // mundo cai exatamente empilhado no mesmo lugar e um cobre o outro.
+    final cascade = Offset(
+        _remoteBoxes.length * 700.0, _remoteBoxes.length * 700.0);
+    final box = _ScreenBox(
       deviceId: deviceId,
-      position: _anchorFor(HotZoneEdge.none, _defaultRemoteSize),
+      label: deviceId,
+      position: _anchorFor(HotZoneEdge.none, _defaultRemoteSize) + cascade,
       size: _defaultRemoteSize,
     );
     setState(() {
-      _boxes.add(box);
-      _message = '$deviceId: arraste até encostar numa borda das suas telas.';
+      _remoteBoxes.add(box);
+      _message =
+          '$deviceId: toque numa borda de uma tela local e depois numa borda dele pra conectar.';
     });
   }
 
-  void _tryCommit(_DeviceBox box, HotZoneEdge edge) {
-    widget.store.remove(box.deviceId);
-    if (edge == HotZoneEdge.none) {
-      _message = '${box.deviceId}: arraste até encostar numa borda das suas telas.';
+  void _onEdgeTapped(_ScreenBox box, HotZoneEdge edge) {
+    final pending = _pendingSelection;
+    if (pending == null) {
+      setState(() => _pendingSelection = _PendingSelection(box: box, edge: edge));
       return;
     }
+    if (identical(pending.box, box) && pending.edge == edge) {
+      setState(() => _pendingSelection = null);
+      return;
+    }
+    setState(() {
+      _pendingSelection = null;
+      _connect(pending.box, pending.edge, box, edge);
+    });
+  }
+
+  void _connect(_ScreenBox boxA, HotZoneEdge edgeA, _ScreenBox boxB, HotZoneEdge edgeB) {
+    if (identical(boxA, boxB)) {
+      _message = 'Escolha bordas de 2 telas diferentes.';
+      return;
+    }
+    if (!boxA.isLocal && !boxB.isLocal) {
+      _message =
+          'Conecte a borda de uma tela sua a um dispositivo remoto — não dois dispositivos remotos entre si.';
+      return;
+    }
+    if (boxA.isLocal && boxB.isLocal) {
+      _replaceConnection(boxA, edgeA, boxB, edgeB);
+      _message = null;
+      return;
+    }
+
+    final aIsLocal = boxA.isLocal;
+    final localBox = aIsLocal ? boxA : boxB;
+    final localEdge = aIsLocal ? edgeA : edgeB;
+    final remoteBox = aIsLocal ? boxB : boxA;
+    final remoteEdge = aIsLocal ? edgeB : edgeA;
+
+    if (!isOuterEdge(localBox.rect, _localBounds, localEdge)) {
+      _message =
+          'Essa borda é interna, entre suas próprias telas — escolha uma borda externa pra conectar num dispositivo.';
+      return;
+    }
+
+    widget.store.remove(remoteBox.deviceId!);
     try {
       widget.store.add(HotZoneConfig(
-        edge: edge,
-        targetDeviceId: box.deviceId,
+        edge: localEdge,
+        targetDeviceId: remoteBox.deviceId!,
         enabled: true,
       ));
       _message = null;
+      _replaceConnection(localBox, localEdge, remoteBox, remoteEdge);
     } on StateError catch (e) {
       _message = e.message;
-    } on ArgumentError {
-      _message = 'Borda inválida.';
     }
+  }
+
+  void _replaceConnection(
+      _ScreenBox boxA, HotZoneEdge edgeA, _ScreenBox boxB, HotZoneEdge edgeB) {
+    _connections.removeWhere((c) => c.uses(boxA, edgeA) || c.uses(boxB, edgeB));
+    _connections.add(_Connection(
+        boxA: boxA, edgeA: edgeA, boxB: boxB, edgeB: edgeB, color: _nextColor()));
   }
 
   void _removeDevice(String deviceId) {
     setState(() {
-      _boxes.removeWhere((box) => box.deviceId == deviceId);
+      final box = _remoteBoxes.firstWhere((b) => b.deviceId == deviceId);
+      _connections.removeWhere((c) => c.references(box));
+      if (identical(_pendingSelection?.box, box)) {
+        _pendingSelection = null;
+      }
+      _remoteBoxes.remove(box);
       widget.store.remove(deviceId);
     });
   }
 
   Rect _totalBounds() {
     var rect = _localBounds;
-    for (final box in _boxes) {
+    for (final box in _remoteBoxes) {
       rect = rect.expandToInclude(box.rect);
     }
     return rect.inflate(_canvasMargin);
@@ -266,7 +407,8 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
             child: Text(
-              'Arraste os dispositivos até encostar numa borda das suas telas.',
+              'Arraste pra organizar. Toque numa borda e depois na borda da'
+              ' outra tela pra conectar de verdade.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -279,15 +421,21 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
                   color: _canvasBg,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final totalBounds = _totalBounds();
-                      final scale = _scaleFor(constraints, totalBounds);
+                      // Enquanto uma tela está sendo arrastada, o zoom/
+                      // enquadramento fica TRAVADO no que já estava antes do
+                      // arraste começar — sem isso, mover uma tela muda o
+                      // retângulo total, que muda a escala, e todas as
+                      // telas parecem se mexer sozinhas.
+                      final totalBounds = _frozenTotalBounds ?? _totalBounds();
+                      final scale =
+                          _frozenScale ?? _scaleFor(constraints, totalBounds);
                       return Stack(
                         children: [
-                          for (final display in _localDisplays)
-                            _buildFixedDisplay(display, totalBounds, scale),
-                          for (var i = 0; i < _boxes.length; i++)
-                            ..._buildDeviceBoxWithHighlight(
-                                _boxes[i], i, totalBounds, scale),
+                          for (final box in _localBoxes)
+                            _buildScreenBox(box, totalBounds, scale),
+                          for (final box in _remoteBoxes)
+                            _buildScreenBox(box, totalBounds, scale),
+                          ..._buildConnectionMarkers(totalBounds, scale),
                         ],
                       );
                     },
@@ -301,123 +449,165 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
     );
   }
 
-  Widget _buildFixedDisplay(
-      PhysicalDisplay display, Rect totalBounds, double scale) {
-    final screenRect = _toScreenRect(display.rect, totalBounds, scale);
-    final label = display.isPrimary
-        ? '${display.width.round()}×${display.height.round()}\nprincipal'
-        : '${display.width.round()}×${display.height.round()}';
+  Widget _buildScreenBox(_ScreenBox box, Rect totalBounds, double scale) {
+    final screenRect = _toScreenRect(box.rect, totalBounds, scale);
     return Positioned.fromRect(
+      key: Key(box.isLocal ? 'local-box-${box.label}' : 'device-box-${box.deviceId}'),
       rect: screenRect,
-      child: _MonitorFrame(label: label),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              onPanStart: (_) => setState(() {
+                _frozenTotalBounds = totalBounds;
+                _frozenScale = scale;
+              }),
+              onPanUpdate: (details) {
+                final activeScale = _frozenScale ?? scale;
+                setState(() => box.position += details.delta / activeScale);
+              },
+              onPanEnd: (_) => setState(() {
+                _frozenTotalBounds = null;
+                _frozenScale = null;
+              }),
+              child: _MonitorFrame(
+                label: box.label,
+                trailing: box.isLocal
+                    ? null
+                    : IconButton(
+                        key: Key('remove-device-${box.deviceId}'),
+                        icon: const Icon(Icons.close,
+                            size: 16, color: Color(0xFFAEB4D6)),
+                        tooltip: 'Remover',
+                        onPressed: () => _removeDevice(box.deviceId!),
+                      ),
+              ),
+            ),
+          ),
+          for (final edge in _clickableEdges) _buildEdgeHotspot(box, edge),
+        ],
+      ),
     );
   }
 
-  List<Widget> _buildDeviceBoxWithHighlight(
-      _DeviceBox box, int index, Rect totalBounds, double scale) {
-    final edge = detectTouchingEdge(_localBounds, box.rect);
-    final color = _connectionColors[index % _connectionColors.length];
-    final widgets = <Widget>[];
+  Widget _buildEdgeHotspot(_ScreenBox box, HotZoneEdge edge) {
+    final selected =
+        identical(_pendingSelection?.box, box) && _pendingSelection?.edge == edge;
+    final hotspot = MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        key: Key(
+            '${box.isLocal ? 'local-box-${box.label}' : 'device-box-${box.deviceId}'}-edge-${edge.name}'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _onEdgeTapped(box, edge),
+        child: selected
+            ? DecoratedBox(
+                decoration:
+                    BoxDecoration(color: _pendingColor.withValues(alpha: 0.35)))
+            : const SizedBox.expand(),
+      ),
+    );
 
-    final highlightRect = _highlightRectFor(edge);
-    if (highlightRect != null) {
-      widgets.add(Positioned.fromRect(
-        rect: _toScreenRect(highlightRect, totalBounds, scale),
+    switch (edge) {
+      case HotZoneEdge.top:
+        return Positioned(
+            top: 0, left: 0, right: 0, height: _edgeHotspotThickness, child: hotspot);
+      case HotZoneEdge.bottom:
+        return Positioned(
+            bottom: 0, left: 0, right: 0, height: _edgeHotspotThickness, child: hotspot);
+      case HotZoneEdge.left:
+        return Positioned(
+            left: 0, top: 0, bottom: 0, width: _edgeHotspotThickness, child: hotspot);
+      case HotZoneEdge.right:
+        return Positioned(
+            right: 0, top: 0, bottom: 0, width: _edgeHotspotThickness, child: hotspot);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  List<Widget> _buildConnectionMarkers(Rect totalBounds, double scale) {
+    final widgets = <Widget>[
+      for (final c in _connections) ...[
+        _buildEdgeMarker(c.boxA.rect, c.edgeA, c.color, totalBounds, scale),
+        _buildEdgeMarker(c.boxB.rect, c.edgeB, c.color, totalBounds, scale),
+      ],
+    ];
+    final pending = _pendingSelection;
+    if (pending != null) {
+      widgets.add(_buildEdgeMarker(
+          pending.box.rect, pending.edge, _pendingColor, totalBounds, scale));
+    }
+    return widgets;
+  }
+
+  Widget _buildEdgeMarker(
+      Rect rect, HotZoneEdge edge, Color color, Rect totalBounds, double scale) {
+    final markerRect = _edgeMarkerRect(rect, edge);
+    return Positioned.fromRect(
+      rect: _toScreenRect(markerRect, totalBounds, scale),
+      child: IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: color,
             boxShadow: [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 12)],
           ),
         ),
-      ));
-    }
-
-    final screenRect = _toScreenRect(box.rect, totalBounds, scale);
-    widgets.add(Positioned.fromRect(
-      key: Key('device-box-${box.deviceId}'),
-      rect: screenRect,
-      child: GestureDetector(
-        onPanUpdate: (details) {
-          setState(() => box.position += details.delta / scale);
-        },
-        onPanEnd: (_) {
-          final edge = detectTouchingEdge(_localBounds, box.rect);
-          setState(() => _tryCommit(box, edge));
-        },
-        child: _MonitorFrame(
-          label: box.deviceId,
-          accent: edge != HotZoneEdge.none ? color : null,
-          trailing: IconButton(
-            key: Key('remove-device-${box.deviceId}'),
-            icon: const Icon(Icons.close, size: 16, color: Color(0xFFAEB4D6)),
-            tooltip: 'Remover',
-            onPressed: () => _removeDevice(box.deviceId),
-          ),
-        ),
       ),
-    ));
-
-    return widgets;
+    );
   }
 
-  static const _highlightThickness = 10.0;
-
-  Rect? _highlightRectFor(HotZoneEdge edge) {
-    final t = _highlightThickness;
+  Rect _edgeMarkerRect(Rect rect, HotZoneEdge edge) {
+    const t = _highlightThickness;
+    const shrink = 0.2;
     switch (edge) {
       case HotZoneEdge.top:
-        return Rect.fromLTWH(
-            _localBounds.left, _localBounds.top - t / 2, _localBounds.width, t);
+        final w = rect.width * (1 - shrink * 2);
+        return Rect.fromLTWH(rect.left + rect.width * shrink, rect.top - t / 2, w, t);
       case HotZoneEdge.bottom:
-        return Rect.fromLTWH(_localBounds.left, _localBounds.bottom - t / 2,
-            _localBounds.width, t);
-      case HotZoneEdge.left:
+        final w = rect.width * (1 - shrink * 2);
         return Rect.fromLTWH(
-            _localBounds.left - t / 2, _localBounds.top, t, _localBounds.height);
+            rect.left + rect.width * shrink, rect.bottom - t / 2, w, t);
+      case HotZoneEdge.left:
+        final h = rect.height * (1 - shrink * 2);
+        return Rect.fromLTWH(rect.left - t / 2, rect.top + rect.height * shrink, t, h);
       case HotZoneEdge.right:
-        return Rect.fromLTWH(_localBounds.right - t / 2, _localBounds.top, t,
-            _localBounds.height);
+        final h = rect.height * (1 - shrink * 2);
+        return Rect.fromLTWH(
+            rect.right - t / 2, rect.top + rect.height * shrink, t, h);
       case HotZoneEdge.topLeft:
-        return Rect.fromCenter(
-            center: _localBounds.topLeft, width: t * 2, height: t * 2);
+        return Rect.fromCenter(center: rect.topLeft, width: t * 2, height: t * 2);
       case HotZoneEdge.topRight:
-        return Rect.fromCenter(
-            center: _localBounds.topRight, width: t * 2, height: t * 2);
+        return Rect.fromCenter(center: rect.topRight, width: t * 2, height: t * 2);
       case HotZoneEdge.bottomLeft:
-        return Rect.fromCenter(
-            center: _localBounds.bottomLeft, width: t * 2, height: t * 2);
+        return Rect.fromCenter(center: rect.bottomLeft, width: t * 2, height: t * 2);
       case HotZoneEdge.bottomRight:
-        return Rect.fromCenter(
-            center: _localBounds.bottomRight, width: t * 2, height: t * 2);
+        return Rect.fromCenter(center: rect.bottomRight, width: t * 2, height: t * 2);
       case HotZoneEdge.none:
-        return null;
+        return Rect.zero;
     }
   }
 }
 
 /// Moldura de monitor "vista de cima", igual o painel nativo de Arranjo de
 /// Monitores do macOS/Windows: bisel em gradiente claro simulando luz vindo
-/// de cima-esquerda, e a "tela" escura por dentro. `accent`, quando não nulo,
-/// pinta a moldura na cor da conexão ativa daquele lado.
+/// de cima-esquerda, e a "tela" escura por dentro.
 class _MonitorFrame extends StatelessWidget {
   final String label;
-  final Color? accent;
   final Widget? trailing;
 
-  const _MonitorFrame({required this.label, this.accent, this.trailing});
+  const _MonitorFrame({required this.label, this.trailing});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(6),
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: accent != null
-              ? [accent!.withValues(alpha: 0.95), accent!.withValues(alpha: 0.55)]
-              : const [Color(0xFFEDEBF5), Color(0xFF7B7695), Color(0xFF524C6B)],
-          stops: accent != null ? const [0.0, 1.0] : const [0.0, 0.55, 1.0],
+          colors: [Color(0xFFEDEBF5), Color(0xFF7B7695), Color(0xFF524C6B)],
+          stops: [0.0, 0.55, 1.0],
         ),
       ),
       padding: const EdgeInsets.all(13),

@@ -20,6 +20,7 @@ Future<void> pumpScreen(
   SendPairingRequest? sendPairingRequest,
   ConfirmPairing? confirmPairing,
   PollIncomingPairingRequest? pollIncomingPairingRequest,
+  PollPairingCompleted? pollPairingCompleted,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: ConnectionsScreen(
@@ -36,6 +37,7 @@ Future<void> pumpScreen(
       // pedido chegando, então sempre retorna null por padrão.
       pollIncomingPairingRequest:
           pollIncomingPairingRequest ?? () => null,
+      pollPairingCompleted: pollPairingCompleted ?? () => null,
     ),
   ));
 }
@@ -216,5 +218,52 @@ void main() {
     expect(find.text('Pedido de pareamento'), findsOneWidget);
     expect(find.byKey(const Key('incoming-pairing-code')), findsOneWidget);
     expect(find.textContaining('123456'), findsOneWidget);
+  });
+
+  testWidgets(
+      'quem está sendo adicionado também vê que o pareamento deu certo',
+      (tester) async {
+    final store = HotZoneConfigStore();
+    var incomingPolls = 0;
+    var completedPolls = 0;
+
+    await pumpScreen(
+      tester,
+      store,
+      pollIncomingPairingRequest: () {
+        incomingPolls++;
+        if (incomingPolls != 1) return null;
+        return const IncomingPairingRequest(
+          requesterDeviceId: 'device-remote',
+          requesterName: 'PC Remoto',
+          code: 123456,
+        );
+      },
+      pollPairingCompleted: () {
+        completedPolls++;
+        // só reporta pronto num tick DEPOIS do pedido ter chegado — reflete
+        // a ordem real: o outro lado só confirma depois de ver o código na
+        // tela, nunca no mesmo instante em que o pedido aparece.
+        if (completedPolls != 2) return null;
+        return const PairingCompleted(
+          peerDeviceId: 'device-remote',
+          peerName: 'PC Remoto',
+        );
+      },
+    );
+
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+    expect(find.text('Pedido de pareamento'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+
+    // o diálogo de código fecha sozinho e a conexão aparece do lado de quem
+    // foi adicionado também — não só do lado de quem pediu.
+    expect(find.text('Pedido de pareamento'), findsNothing);
+    expect(store.zones, hasLength(1));
+    expect(store.zones.single.targetDeviceId, 'device-remote');
+    expect(find.textContaining('Pareado com PC Remoto'), findsOneWidget);
   });
 }

@@ -215,6 +215,10 @@ static char g_pair_store_path[512];
 /* Notificação pra UI (consumida por poll_incoming_request). */
 static altcross_pairing_incoming_request_t g_pending;
 
+/* Notificação pra UI do lado de quem recebeu o pedido, de que o CONFIRM
+ * chegou certo e o pareamento terminou (consumida por poll_completed). */
+static altcross_pairing_completed_t g_completed;
+
 /* Estado real de "esperando confirmação", independente de a UI já ter lido
  * a notificação acima ou não — sem isso, a UI consumindo a notificação
  * (poll) apagaria também a validação do código quando o CONFIRM chegasse. */
@@ -262,6 +266,12 @@ static void handle_confirm(const decoded_pair_msg_t *msg,
         altcross_pairing_store_upsert(&store, msg->device_id,
                                        g_awaiting_name, secret, from_host, 0);
         altcross_pairing_store_save(&store, g_pair_store_path);
+
+        g_completed.pending = 1;
+        snprintf(g_completed.peer_device_id, sizeof(g_completed.peer_device_id),
+                  "%s", msg->device_id);
+        snprintf(g_completed.peer_name, sizeof(g_completed.peer_name), "%s",
+                  g_awaiting_name);
 
         reply_len = encode_accept(g_pair_device_id, g_pair_name, secret,
                                    reply_buf, sizeof(reply_buf));
@@ -332,6 +342,7 @@ int altcross_pairing_start_responder(const char *my_device_id,
     snprintf(g_pair_name, sizeof(g_pair_name), "%s", my_name);
     snprintf(g_pair_store_path, sizeof(g_pair_store_path), "%s", store_path);
     g_pending.pending = 0;
+    g_completed.pending = 0;
     g_awaiting_confirm = 0;
     g_pair_running = 1;
 
@@ -381,6 +392,15 @@ int altcross_pairing_poll_incoming_request(
     }
     *out = g_pending;
     g_pending.pending = 0;
+    return 1;
+}
+
+int altcross_pairing_poll_completed(altcross_pairing_completed_t *out) {
+    if (!g_completed.pending) {
+        return 0;
+    }
+    *out = g_completed;
+    g_completed.pending = 0;
     return 1;
 }
 

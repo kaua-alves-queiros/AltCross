@@ -82,6 +82,20 @@ typedef _PollIncomingRequestNative = Int32 Function(
 typedef _PollIncomingRequestDart = int Function(
     Pointer<_NativeIncomingRequest> out);
 
+/// Espelha `altcross_pairing_completed_t` de
+/// core/include/altcross/pairing_protocol.h.
+final class _NativeCompleted extends Struct {
+  @Int32()
+  external int pending;
+  @Array(33)
+  external Array<Uint8> peerDeviceId;
+  @Array(64)
+  external Array<Uint8> peerName;
+}
+
+typedef _PollCompletedNative = Int32 Function(Pointer<_NativeCompleted> out);
+typedef _PollCompletedDart = int Function(Pointer<_NativeCompleted> out);
+
 typedef _SendPairingRequestNative = Int32 Function(
     Pointer<Utf8> myDeviceId, Pointer<Utf8> myName, Pointer<Utf8> peerHost);
 typedef _SendPairingRequestDart = int Function(
@@ -369,6 +383,33 @@ class AltCrossNative {
             _readFixedArray(out.ref.requesterDeviceId, _deviceIdSize),
         requesterName: _readFixedArray(out.ref.requesterName, _deviceNameSize),
         code: out.ref.code,
+      );
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// Consome (se houver) a notificação de que um pareamento que ESTE
+  /// dispositivo aprovou (mostrando o código pro outro lado digitar) acabou
+  /// de ser confirmado com sucesso — é assim que quem está SENDO adicionado
+  /// fica sabendo que deu certo, já que só quem inicia o pedido recebe o
+  /// resultado direto de `confirmPairing`. Retorna null se não há nenhuma
+  /// notificação pendente agora.
+  static PairingCompleted? pollPairingCompleted() {
+    final poll = _library()
+        .lookup<NativeFunction<_PollCompletedNative>>(
+            'altcross_pairing_poll_completed')
+        .asFunction<_PollCompletedDart>();
+
+    final out = calloc<_NativeCompleted>();
+    try {
+      final found = poll(out);
+      if (found == 0) {
+        return null;
+      }
+      return PairingCompleted(
+        peerDeviceId: _readFixedArray(out.ref.peerDeviceId, _deviceIdSize),
+        peerName: _readFixedArray(out.ref.peerName, _deviceNameSize),
       );
     } finally {
       calloc.free(out);

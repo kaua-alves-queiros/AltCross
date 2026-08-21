@@ -81,6 +81,54 @@ static void test_pairing_handshake_happy_path(void) {
     remove(store_b);
 }
 
+/* Do lado de quem RECEBEU o pedido (o responder): depois que quem pediu
+ * confirma com o código certo, o responder também deve saber que o
+ * pareamento terminou — não só quem pediu (ver bug: quem adiciona vê que
+ * foi adicionado, mas quem está sendo adicionado nunca fica sabendo). */
+static void test_responder_learns_pairing_completed(void) {
+    const char *store_a = "altcross_test_pairing_proto_completed_a.txt";
+    const char *store_b = "altcross_test_pairing_proto_completed_b.txt";
+    remove(store_a);
+    remove(store_b);
+
+    altcross_pairing_completed_t completed;
+
+    /* start_responder zera qualquer notificação deixada por um teste
+     * anterior — sem isso, um poll_completed aqui poderia ver o resultado
+     * de outro par A/B que nunca consumiu a notificação. */
+    ASSERT_EQ(0, altcross_pairing_start_responder("device-B", "PC B",
+                                                    store_b));
+    ASSERT_EQ(0, altcross_pairing_send_request("device-A", "PC A",
+                                                 "127.0.0.1"));
+
+    altcross_pairing_incoming_request_t incoming;
+    ASSERT_TRUE(wait_for_incoming_request(&incoming));
+
+    ASSERT_EQ(0, altcross_pairing_poll_completed(&completed));
+
+    int confirm_rc = altcross_pairing_confirm(
+        "device-A", "127.0.0.1", incoming.code, 2000, store_a, NULL, NULL);
+    ASSERT_EQ(1, confirm_rc);
+
+    int found = 0;
+    for (int i = 0; i < 20 && !found; i++) {
+        found = altcross_pairing_poll_completed(&completed);
+        if (!found) {
+            TEST_SLEEP_MS(50);
+        }
+    }
+    ASSERT_TRUE(found);
+    ASSERT_EQ(0, strcmp("device-A", completed.peer_device_id));
+    ASSERT_EQ(0, strcmp("PC A", completed.peer_name));
+
+    /* consumida — não aparece de novo */
+    ASSERT_EQ(0, altcross_pairing_poll_completed(&completed));
+
+    altcross_pairing_stop_responder();
+    remove(store_a);
+    remove(store_b);
+}
+
 static void test_pairing_wrong_code_is_rejected(void) {
     const char *store_b = "altcross_test_pairing_proto_b2.txt";
     remove(store_b);
@@ -129,6 +177,7 @@ static void test_confirm_without_pending_request_is_rejected(void) {
 void run_pairing_protocol_tests(void) {
     RUN_TEST(test_poll_returns_zero_when_nothing_pending);
     RUN_TEST(test_pairing_handshake_happy_path);
+    RUN_TEST(test_responder_learns_pairing_completed);
     RUN_TEST(test_pairing_wrong_code_is_rejected);
     RUN_TEST(test_confirm_without_pending_request_is_rejected);
 }
