@@ -168,6 +168,25 @@ que o mesmo processo pergunta E responde). Fique de olho nisso ao adicionar qual
 funcionalidade de rede nova — App Sandbox no macOS é silencioso quando bloqueia, não
 lança erro nenhum do lado do socket, só a operação nunca completa.
 
+**Segundo bug real achado testando entre 2 máquinas físicas de verdade (Mac + Windows
+na mesma rede)**: a busca funcionava numa direção (Mac achava o Windows) mas não na
+outra. Causa: `altcross_discovery_run_query` só mandava o broadcast pra
+`255.255.255.255`, e qual interface de rede o SO usa pra isso depende da tabela de
+rotas — numa máquina com mais de uma interface IPv4 ativa (no caso, o Windows tinha
+Wi-Fi *e* um adaptador VirtualBox Host-Only), o broadcast podia sair pela interface
+errada. Corrigido com `altcross_net_list_broadcast_addresses` (novo, em
+`net_socket.h`/`.c`, via `getifaddrs` no macOS/Linux e `GetAdaptersAddresses` no
+Windows) — enumera todas as interfaces ativas não-loopback e manda o broadcast pro
+endereço dirigido de cada uma (ex.: `10.8.153.255`), além do `255.255.255.255` de
+antes. Isso introduziu duplicata (a mesma máquina respondendo mais de uma vez, uma por
+interface que a alcançou) — corrigido deduplicando por `device_id` dentro do próprio
+`altcross_discovery_run_query`. Verificado de verdade: `discovery_demo query` neste
+Mac encontrou tanto a si mesmo quanto o PC Windows real na rede (`SAC-ANDRE`,
+`10.8.153.221`), sem duplicata, sem eu ter feito nada manual do lado do Windows (o
+app dele já estava rodando com o respondedor). **Ainda não confirmado**: a direção
+Windows→Mac com essa correção (o Windows precisa puxar/recompilar esse código antes
+de testar de novo).
+
 Falta ainda: (1) o handshake de pareamento (`PAIR_REQUEST`/`PAIR_CONFIRM`) usando o
 código gerado por `pairing.h` sobre a rede — sem isso, os "dispositivos remotos" tanto
 na tela de arranjo quanto os "encontrados" na tela de Conexões não são pareados de
