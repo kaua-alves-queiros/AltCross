@@ -10,12 +10,17 @@ import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/hot_zone_config_persistence.dart';
+import 'services/local_hotzone_persistence.dart';
+import 'services/local_hotzone_warp.dart';
 import 'services/screen_connections.dart';
 import 'services/settings_store.dart';
 import 'state/hot_zone_config_store.dart';
+import 'state/local_hotzone_store.dart';
 import 'theme/app_theme.dart';
 
 typedef PollIncomingZone = IncomingZonePush? Function();
+typedef GetCursorPosition = Offset? Function();
+typedef WarpCursor = bool Function(int x, int y);
 
 void main() {
   // Só escuta e responde via unicast — não manda broadcast, então não
@@ -49,7 +54,13 @@ void main() {
   }
   store.onChanged = HotZoneConfigPersistence.save;
 
-  runApp(AltCrossApp(store: store));
+  final localHotZoneStore = LocalHotZoneStore();
+  for (final mapping in LocalHotZonePersistence.load()) {
+    localHotZoneStore.add(mapping);
+  }
+  localHotZoneStore.onChanged = LocalHotZonePersistence.save;
+
+  runApp(AltCrossApp(store: store, localHotZoneStore: localHotZoneStore));
 }
 
 ThemeMode _toThemeMode(AppThemePreference preference) {
@@ -65,29 +76,39 @@ ThemeMode _toThemeMode(AppThemePreference preference) {
 
 class AltCrossApp extends StatefulWidget {
   final HotZoneConfigStore store;
-  final List<PhysicalDisplay> Function()? displayProvider;
+  final LocalHotZoneStore localHotZoneStore;
+  final List<PhysicalDisplay> Function() displayProvider;
   final DiscoveryRunner? discoveryRunner;
   final SendPairingRequest? sendPairingRequest;
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
   final PollPairingCompleted? pollPairingCompleted;
   final PollIncomingZone pollIncomingZone;
+  final GetCursorPosition getCursorPosition;
+  final WarpCursor warpCursor;
   final LoadThemePreference loadThemePreference;
   final SaveThemePreference saveThemePreference;
 
   const AltCrossApp({
     super.key,
     required this.store,
-    this.displayProvider,
+    required this.localHotZoneStore,
+    List<PhysicalDisplay> Function()? displayProvider,
     this.discoveryRunner,
     this.sendPairingRequest,
     this.confirmPairing,
     this.pollIncomingPairingRequest,
     this.pollPairingCompleted,
     PollIncomingZone? pollIncomingZone,
+    GetCursorPosition? getCursorPosition,
+    WarpCursor? warpCursor,
     LoadThemePreference? loadThemePreference,
     SaveThemePreference? saveThemePreference,
-  })  : pollIncomingZone = pollIncomingZone ?? AltCrossNative.pollIncomingZone,
+  })  : displayProvider = displayProvider ?? AltCrossNative.enumerateDisplays,
+        pollIncomingZone = pollIncomingZone ?? AltCrossNative.pollIncomingZone,
+        getCursorPosition =
+            getCursorPosition ?? AltCrossNative.getCursorPosition,
+        warpCursor = warpCursor ?? AltCrossNative.warpCursor,
         loadThemePreference =
             loadThemePreference ?? SettingsStore.loadThemePreference,
         saveThemePreference =
@@ -100,6 +121,7 @@ class AltCrossApp extends StatefulWidget {
 class _AltCrossAppState extends State<AltCrossApp> {
   late AppThemePreference _themePreference;
   Timer? _incomingZonePollTimer;
+  Timer? _cursorWarpTimer;
 
   @override
   void initState() {
@@ -110,12 +132,42 @@ class _AltCrossAppState extends State<AltCrossApp> {
     // em Ajustes, não só quando o Arranjo/Conexões está aberto.
     _incomingZonePollTimer = Timer.periodic(
         const Duration(milliseconds: 700), (_) => _pollIncomingZone());
+    // Mesma lógica: o salto de cursor entre telas locais tem que funcionar
+    // o tempo todo que o app estiver aberto, não só na tela de Arranjo.
+    // Intervalo curto (responsividade de um "hotzone" de verdade), mas é só
+    // 1 leitura de posição + 1 enumeração local — leve, sem rede.
+    _cursorWarpTimer = Timer.periodic(
+        const Duration(milliseconds: 40), (_) => _checkCursorWarp());
   }
 
   @override
   void dispose() {
     _incomingZonePollTimer?.cancel();
+    _cursorWarpTimer?.cancel();
     super.dispose();
+  }
+
+  void _checkCursorWarp() {
+    final mappings = widget.localHotZoneStore.mappings;
+    if (mappings.isEmpty) {
+      return;
+    }
+    final cursor = widget.getCursorPosition();
+    if (cursor == null) {
+      return;
+    }
+    final displaysById = <int, Rect>{
+      for (final d in widget.displayProvider())
+        if (d.displayId >= 0) d.displayId: d.rect,
+    };
+    final target = computeCursorWarp(
+      cursor: cursor,
+      displaysById: displaysById,
+      mappings: mappings,
+    );
+    if (target != null) {
+      widget.warpCursor(target.dx.round(), target.dy.round());
+    }
   }
 
   void _pollIncomingZone() {
@@ -149,6 +201,7 @@ class _AltCrossAppState extends State<AltCrossApp> {
       themeMode: _toThemeMode(_themePreference),
       home: HomeScreen(
         store: widget.store,
+        localHotZoneStore: widget.localHotZoneStore,
         displayProvider: widget.displayProvider,
         discoveryRunner: widget.discoveryRunner,
         sendPairingRequest: widget.sendPairingRequest,
