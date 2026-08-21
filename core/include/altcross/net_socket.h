@@ -30,6 +30,24 @@ ALTCROSS_API int altcross_socket_send_to(altcross_socket_t *sock,
 ALTCROSS_API int altcross_socket_receive(altcross_socket_t *sock, uint8_t *buf,
                                           size_t buf_size, int timeout_ms);
 
+/* Igual altcross_socket_receive, mas também informa de onde veio o
+ * datagrama (out_host precisa ter pelo menos out_host_size bytes) —
+ * necessário pra descoberta, onde não se sabe de antemão quem vai
+ * responder. */
+ALTCROSS_API int altcross_socket_receive_from(altcross_socket_t *sock,
+                                               uint8_t *buf, size_t buf_size,
+                                               int timeout_ms, char *out_host,
+                                               size_t out_host_size,
+                                               int *out_port);
+
+/* Habilita o envio de datagramas broadcast (SO_BROADCAST) — sem isso,
+ * mandar pra um endereço de broadcast (ex.: 255.255.255.255) falha.
+ * Retorna 0 em sucesso. No macOS/Windows isso é o que aciona o prompt de
+ * permissão de Rede Local na primeira vez que um pacote é enviado de
+ * verdade — só chamar isso a partir de uma ação explícita do usuário (ex.:
+ * botão "Buscar dispositivos"), nunca automaticamente ao abrir uma tela. */
+ALTCROSS_API int altcross_socket_enable_broadcast(altcross_socket_t *sock);
+
 ALTCROSS_API void altcross_socket_close(altcross_socket_t *sock);
 
 #endif

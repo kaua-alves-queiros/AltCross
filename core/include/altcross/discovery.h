@@ -53,4 +53,37 @@ ALTCROSS_API int altcross_discovery_decode(
     const uint8_t *buf, size_t len, altcross_discovery_msg_type_t *out_type,
     char *out_query_from_device_id, altcross_discovery_reply_t *out_reply);
 
+#define ALTCROSS_DISCOVERY_BROADCAST_ADDRESS "255.255.255.255"
+#define ALTCROSS_DISCOVERY_HOST_SIZE 46 /* cabe um IPv4/IPv6 em texto */
+
+/* Manda uma pergunta de descoberta em broadcast na rede local e coleta
+ * respostas por até timeout_ms. AÇÃO DE REDE DE VERDADE (abre socket,
+ * habilita broadcast, envia) — só chamar a partir de uma ação explícita do
+ * usuário (ex.: botão "Buscar dispositivos"), nunca automaticamente ao
+ * abrir uma tela; no macOS/Windows isso aciona o prompt de permissão de
+ * Rede Local na primeira vez. Bloqueia a thread chamadora pelo tempo
+ * informado — do lado Flutter, rodar isso dentro de uma isolate (ver
+ * "não trave a UI thread" no AGENTS.md).
+ *
+ * IMPORTANTE: isso só ENCONTRA outra máquina se ela estiver rodando algo
+ * que responde a ALTCROSS_DISCOVERY_MSG_QUERY — o daemon (altcrossd) ainda
+ * não implementa esse lado de "responder" (só o cliente que pergunta está
+ * pronto aqui). Ver "Status da funcionalidade" no AGENTS.md.
+ *
+ * Preenche os buffers de saída (paralelos, cada um com max_count posições
+ * reservadas pelo chamador):
+ *   out_device_ids: max_count * ALTCROSS_DEVICE_ID_SIZE bytes
+ *   out_names:      max_count * ALTCROSS_DEVICE_NAME_SIZE bytes
+ *   out_hosts:      max_count * ALTCROSS_DISCOVERY_HOST_SIZE bytes
+ *   out_ports:      max_count ints
+ *
+ * Retorna a quantidade de respostas distintas recebidas (pode ser maior que
+ * max_count; nesse caso só as primeiras max_count são escritas nos
+ * buffers), ou -1 em erro (ex.: não conseguiu abrir socket/broadcast). */
+ALTCROSS_API int altcross_discovery_run_query(const char *from_device_id,
+                                               int timeout_ms,
+                                               char *out_device_ids,
+                                               char *out_names, int *out_ports,
+                                               char *out_hosts, int max_count);
+
 #endif

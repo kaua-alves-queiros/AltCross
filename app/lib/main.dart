@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'models/physical_display.dart';
-import 'screens/arrangement_screen.dart';
+import 'screens/connections_screen.dart';
+import 'screens/home_screen.dart';
 import 'state/hot_zone_config_store.dart';
 
 void main() {
@@ -11,8 +12,14 @@ void main() {
 class AltCrossApp extends StatelessWidget {
   final HotZoneConfigStore store;
   final List<PhysicalDisplay> Function()? displayProvider;
+  final DiscoveryRunner? discoveryRunner;
 
-  const AltCrossApp({super.key, required this.store, this.displayProvider});
+  const AltCrossApp({
+    super.key,
+    required this.store,
+    this.displayProvider,
+    this.discoveryRunner,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +29,11 @@ class AltCrossApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: ArrangementScreen(store: store, displayProvider: displayProvider),
+      home: HomeScreen(
+        store: store,
+        displayProvider: displayProvider,
+        discoveryRunner: discoveryRunner,
+      ),
     );
   }
 }
