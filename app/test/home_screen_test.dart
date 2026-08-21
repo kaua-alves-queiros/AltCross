@@ -2,6 +2,7 @@ import 'package:altcross_app/models/physical_display.dart';
 import 'package:altcross_app/screens/home_screen.dart';
 import 'package:altcross_app/services/settings_store.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
+import 'package:altcross_app/state/local_hotzone_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +10,7 @@ Future<void> pumpHome(WidgetTester tester, HotZoneConfigStore store) async {
   await tester.pumpWidget(MaterialApp(
     home: HomeScreen(
       store: store,
+      localHotZoneStore: LocalHotZoneStore(),
       currentThemePreference: AppThemePreference.system,
       onThemePreferenceChanged: (_) {},
       displayProvider: () => const [
