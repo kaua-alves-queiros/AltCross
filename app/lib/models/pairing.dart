@@ -13,6 +13,17 @@ class IncomingPairingRequest {
   });
 }
 
+/// Notificação de que um pareamento que ESTE dispositivo aprovou (mostrando
+/// o código na tela) terminou — o outro lado digitou o código certo e
+/// confirmou. Sem isso, quem está sendo adicionado nunca fica sabendo que
+/// deu certo (só quem iniciou o pedido descobre, via `PairingResult`).
+class PairingCompleted {
+  final String peerDeviceId;
+  final String peerName;
+
+  const PairingCompleted({required this.peerDeviceId, required this.peerName});
+}
+
 enum PairingOutcome { accepted, rejected, error }
 
 /// Resultado de `AltCrossNative.confirmPairing`.
