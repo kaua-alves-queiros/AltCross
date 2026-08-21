@@ -16,6 +16,7 @@ class HomeScreen extends StatelessWidget {
   final SendPairingRequest? sendPairingRequest;
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
+  final PollPairingCompleted? pollPairingCompleted;
   final AppThemePreference currentThemePreference;
   final ValueChanged<AppThemePreference> onThemePreferenceChanged;
 
@@ -29,6 +30,7 @@ class HomeScreen extends StatelessWidget {
     this.sendPairingRequest,
     this.confirmPairing,
     this.pollIncomingPairingRequest,
+    this.pollPairingCompleted,
   });
 
   @override
@@ -65,6 +67,7 @@ class HomeScreen extends StatelessWidget {
                   sendPairingRequest: sendPairingRequest,
                   confirmPairing: confirmPairing,
                   pollIncomingPairingRequest: pollIncomingPairingRequest,
+                  pollPairingCompleted: pollPairingCompleted,
                 ),
               )),
             ),

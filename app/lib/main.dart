@@ -6,6 +6,7 @@ import 'models/physical_display.dart';
 import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/hot_zone_config_persistence.dart';
 import 'services/settings_store.dart';
 import 'state/hot_zone_config_store.dart';
 import 'theme/app_theme.dart';
@@ -21,7 +22,21 @@ void main() {
   // parear com esta máquina (só descobrir que ela existe).
   AltCrossNative.startPairingResponder(name: Platform.localHostname);
 
-  runApp(AltCrossApp(store: HotZoneConfigStore()));
+  final store = HotZoneConfigStore();
+  // carrega as hotzones salvas de uma sessão anterior ANTES de plugar
+  // onChanged — senão cada zona carregada dispararia uma gravação
+  // desnecessária (inofensiva, mas redundante) do mesmo conteúdo.
+  for (final zone in HotZoneConfigPersistence.load()) {
+    try {
+      store.add(zone);
+    } on StateError {
+      /* arquivo salvo com 2 zonas habilitadas na mesma borda — ignora a
+       * duplicata em vez de travar a inicialização do app. */
+    }
+  }
+  store.onChanged = HotZoneConfigPersistence.save;
+
+  runApp(AltCrossApp(store: store));
 }
 
 ThemeMode _toThemeMode(AppThemePreference preference) {
@@ -42,6 +57,7 @@ class AltCrossApp extends StatefulWidget {
   final SendPairingRequest? sendPairingRequest;
   final ConfirmPairing? confirmPairing;
   final PollIncomingPairingRequest? pollIncomingPairingRequest;
+  final PollPairingCompleted? pollPairingCompleted;
   final LoadThemePreference loadThemePreference;
   final SaveThemePreference saveThemePreference;
 
@@ -53,6 +69,7 @@ class AltCrossApp extends StatefulWidget {
     this.sendPairingRequest,
     this.confirmPairing,
     this.pollIncomingPairingRequest,
+    this.pollPairingCompleted,
     LoadThemePreference? loadThemePreference,
     SaveThemePreference? saveThemePreference,
   })  : loadThemePreference =
@@ -92,6 +109,7 @@ class _AltCrossAppState extends State<AltCrossApp> {
         sendPairingRequest: widget.sendPairingRequest,
         confirmPairing: widget.confirmPairing,
         pollIncomingPairingRequest: widget.pollIncomingPairingRequest,
+        pollPairingCompleted: widget.pollPairingCompleted,
         currentThemePreference: _themePreference,
         onThemePreferenceChanged: _changeThemePreference,
       ),
