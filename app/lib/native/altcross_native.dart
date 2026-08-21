@@ -926,4 +926,76 @@ class AltCrossNative {
       calloc.free(outPort);
     }
   }
+
+  // ── Connection Monitor ──────────────────────────────────────────────
+
+  static bool _monitorRunning = false;
+
+  /// Inicia o monitor de heartbeat em background. Quando a connectividade
+  /// com um peer pareado muda, chama [onStatusChange].
+  static void startConnectionMonitor({
+    required void Function(String deviceId, bool online) onStatusChange,
+  }) {
+    if (_monitorRunning) return;
+
+    final start = _library()
+        .lookup<NativeFunction<_StartConnectionMonitorNative>>(
+            'altcross_connection_monitor_start')
+        .asFunction<_StartConnectionMonitorDart>();
+
+    final storePath = _pairingStorePath().toNativeUtf8();
+    try {
+      final rc = start(storePath, onStatusChange);
+      if (rc == 0) {
+        _monitorRunning = true;
+      }
+    } finally {
+      calloc.free(storePath);
+    }
+  }
+
+  /// Para o monitor de heartbeat.
+  static void stopConnectionMonitor() {
+    if (!_monitorRunning) return;
+
+    final stop = _library()
+        .lookup<NativeFunction<_StopConnectionMonitorNative>>(
+            'altcross_connection_monitor_stop')
+        .asFunction<_StopConnectionMonitorDart>();
+
+    stop();
+    _monitorRunning = false;
+  }
+
+  /// Retorna o status online/offline de um peer específico.
+  /// 1 = online, 0 = offline, -1 = não encontrado ou monitor parado.
+  static int isPeerOnline(String deviceId) {
+    final fn = _library()
+        .lookup<NativeFunction<_IsPeerOnlineNative>>(
+            'altcross_connection_monitor_is_peer_online')
+        .asFunction<_IsPeerOnlineDart>();
+
+    final idNative = deviceId.toNativeUtf8();
+    try {
+      return fn(idNative);
+    } finally {
+      calloc.free(idNative);
+    }
+  }
 }
+
+// ── Connection Monitor typedefs ─────────────────────────────────────
+
+typedef _StatusCallbackNative = Void Function(Utf8 device_id, Int32 online);
+typedef _StatusCallbackDart = void Function(String device_id, int online);
+
+typedef _StartConnectionMonitorNative = Int32 Function(
+    Utf8 store_path, _StatusCallbackNative callback);
+typedef _StartConnectionMonitorDart = int Function(
+    String storePath, _StatusCallbackDart callback);
+
+typedef _StopConnectionMonitorNative = Void Function();
+typedef _StopConnectionMonitorDart = void Function();
+
+typedef _IsPeerOnlineNative = Int32 Function(Utf8 device_id);
+typedef _IsPeerOnlineDart = int Function(String deviceId);

@@ -9,6 +9,7 @@ import 'models/screen_sync.dart';
 import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/connection_status.dart';
 import 'services/hot_zone_config_persistence.dart';
 import 'services/local_hotzone_persistence.dart';
 import 'services/local_hotzone_warp.dart';
@@ -17,6 +18,7 @@ import 'services/settings_store.dart';
 import 'state/hot_zone_config_store.dart';
 import 'state/local_hotzone_store.dart';
 import 'theme/app_theme.dart';
+import 'widgets/connection_loss_overlay.dart';
 
 typedef PollIncomingZone = IncomingZonePush? Function();
 typedef GetCursorPosition = Offset? Function();
@@ -60,7 +62,14 @@ void main() {
   }
   localHotZoneStore.onChanged = LocalHotZonePersistence.save;
 
-  runApp(AltCrossApp(store: store, localHotZoneStore: localHotZoneStore));
+  final connectionStatus = ConnectionStatusNotifier();
+  connectionStatus.start();
+
+  runApp(AltCrossApp(
+    store: store,
+    localHotZoneStore: localHotZoneStore,
+    connectionStatus: connectionStatus,
+  ));
 }
 
 ThemeMode _toThemeMode(AppThemePreference preference) {
@@ -77,6 +86,7 @@ ThemeMode _toThemeMode(AppThemePreference preference) {
 class AltCrossApp extends StatefulWidget {
   final HotZoneConfigStore store;
   final LocalHotZoneStore localHotZoneStore;
+  final ConnectionStatusNotifier connectionStatus;
   final List<PhysicalDisplay> Function() displayProvider;
   final DiscoveryRunner? discoveryRunner;
   final SendPairingRequest? sendPairingRequest;
@@ -93,6 +103,7 @@ class AltCrossApp extends StatefulWidget {
     super.key,
     required this.store,
     required this.localHotZoneStore,
+    required this.connectionStatus,
     List<PhysicalDisplay> Function()? displayProvider,
     this.discoveryRunner,
     this.sendPairingRequest,
@@ -194,12 +205,14 @@ class _AltCrossAppState extends State<AltCrossApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'AltCross',
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: _toThemeMode(_themePreference),
-      home: HomeScreen(
+    return ConnectionLossOverlay(
+      notifier: widget.connectionStatus,
+      child: MaterialApp(
+        title: 'AltCross',
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: _toThemeMode(_themePreference),
+        home: HomeScreen(
         store: widget.store,
         localHotZoneStore: widget.localHotZoneStore,
         displayProvider: widget.displayProvider,
@@ -210,6 +223,7 @@ class _AltCrossAppState extends State<AltCrossApp> {
         pollPairingCompleted: widget.pollPairingCompleted,
         currentThemePreference: _themePreference,
         onThemePreferenceChanged: _changeThemePreference,
+      ),
       ),
     );
   }
