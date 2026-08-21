@@ -127,29 +127,31 @@ void main() {
   });
 
   testWidgets(
-      'conectar 2 telas locais move o monitor de verdade no SO, não só visualmente',
+      'tocar nas bordas de 2 telas locais só define a hotzone — nunca mexe no monitor de verdade',
       (tester) async {
+    // arrastar (com snap) é o que reposiciona de verdade — ver onPanEnd em
+    // _buildScreenBox. Isso aqui é sobre o outro gesto (tocar bordas),
+    // que só deve marcar a conexão visual/hotzone, nunca chamar
+    // setLocalDisplayOrigin (ver AGENTS.md — arrasto pixel-perfeito não é
+    // testado automaticamente aqui, a escala do canvas é dinâmica).
     const displays = [
       PhysicalDisplay(
           x: 0, y: 0, width: 1920, height: 1080, isPrimary: true, displayId: 1),
       PhysicalDisplay(
           x: 3000, y: 500, width: 1470, height: 956, isPrimary: false, displayId: 2),
     ];
-    final calls = <Map<String, int>>[];
+    var repositionCalls = 0;
 
     await pumpScreen(
       tester,
       HotZoneConfigStore(),
       displays: displays,
       setLocalDisplayOrigin: ({required displayId, required x, required y}) {
-        calls.add({'displayId': displayId, 'x': x, 'y': y});
+        repositionCalls++;
         return true;
       },
     );
 
-    // borda direita da principal (1920x1080, id 1) com a borda esquerda da
-    // segunda (1470x956, id 2) — a segunda tem que encostar exatamente no
-    // x=1920 (borda direita da principal), sem gap nenhum.
     await tester.tap(find.byKey(
         const Key('local-box-1920×1080\nprincipal-edge-right')));
     await tester.pump();
@@ -157,38 +159,7 @@ void main() {
         find.byKey(const Key('local-box-1470×956-edge-left')));
     await tester.pumpAndSettle();
 
-    expect(calls, hasLength(1));
-    expect(calls.single['displayId'], 2);
-    expect(calls.single['x'], 1920);
-    expect(calls.single['y'], 500); // eixo perpendicular mantém a posição atual
-  });
-
-  testWidgets(
-      'quando o SO recusa mover o monitor, não finge que conectou',
-      (tester) async {
-    const displays = [
-      PhysicalDisplay(
-          x: 0, y: 0, width: 1920, height: 1080, isPrimary: true, displayId: 1),
-      PhysicalDisplay(
-          x: 3000, y: 500, width: 1470, height: 956, isPrimary: false, displayId: 2),
-    ];
-
-    await pumpScreen(
-      tester,
-      HotZoneConfigStore(),
-      displays: displays,
-      setLocalDisplayOrigin: ({required displayId, required x, required y}) =>
-          false,
-    );
-
-    await tester.tap(find.byKey(
-        const Key('local-box-1920×1080\nprincipal-edge-right')));
-    await tester.pump();
-    await tester.tap(
-        find.byKey(const Key('local-box-1470×956-edge-left')));
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('recusou mover'), findsOneWidget);
+    expect(repositionCalls, 0);
   });
 
   testWidgets(

@@ -10,6 +10,57 @@
 #include "altcross/platform_input.h"
 
 #include <ApplicationServices/ApplicationServices.h>
+#include <math.h>
+#include <stdint.h>
+
+/* Ponto mais alto (menor Y, convenção nativa do CG: Y pra baixo, ancorado
+ * no topo da tela PRINCIPAL) entre todos os monitores ativos agora — é o
+ * offset que converte entre a origem nativa do CG (sempre a principal) e a
+ * convenção deste app (Y=0 no topo de TODAS as telas, ver displays.h /
+ * altcross_displays_enumerate). Puro CoreGraphics, sem AppKit — mantém este
+ * arquivo compilável como .c simples (NSScreen exigiria Objective-C, ver
+ * displays.m). */
+static double cg_min_display_top(void) {
+    CGDirectDisplayID displays[32];
+    uint32_t count = 0;
+    CGGetActiveDisplayList(32, displays, &count);
+    double min_top = 0;
+    int first = 1;
+    for (uint32_t i = 0; i < count; i++) {
+        CGRect bounds = CGDisplayBounds(displays[i]);
+        if (first || bounds.origin.y < min_top) {
+            min_top = bounds.origin.y;
+            first = 0;
+        }
+    }
+    return min_top;
+}
+
+int altcross_platform_get_cursor_position(int *out_x, int *out_y) {
+    CGEventRef event = CGEventCreate(NULL);
+    if (!event) {
+        return 1;
+    }
+    CGPoint loc = CGEventGetLocation(event);
+    CFRelease(event);
+
+    double min_top = cg_min_display_top();
+    *out_x = (int)lround(loc.x);
+    *out_y = (int)lround(loc.y - min_top);
+    return 0;
+}
+
+int altcross_platform_warp_cursor(int x, int y) {
+    double min_top = cg_min_display_top();
+    CGPoint target = CGPointMake((double)x, (double)y + min_top);
+    CGError err = CGWarpMouseCursorPosition(target);
+    /* Sem isso, o SO "esquece" onde o mouse de verdade está por um instante
+     * depois do warp e o próximo movimento físico do usuário fica com um
+     * salto/lag estranho — reassocia a posição do cursor com os eventos de
+     * mouse reais imediatamente. */
+    CGAssociateMouseAndMouseCursorPosition(true);
+    return err == kCGErrorSuccess ? 0 : 1;
+}
 
 /* Códigos de tecla virtuais do macOS (estáveis desde sempre, não mudam entre
  * versões do SO). Evitamos depender de <Carbon/Carbon.h> só por essas

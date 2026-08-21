@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/hot_zone.dart';
+import '../models/local_hotzone.dart';
 import '../models/physical_display.dart';
 import '../native/altcross_native.dart';
 import '../services/screen_connections.dart';
 import '../state/hot_zone_config_store.dart';
+import '../state/local_hotzone_store.dart';
 
 typedef LookupTrustedHost = String? Function(String deviceId);
 typedef QueryPeerScreens = Future<List<PhysicalDisplay>> Function(
@@ -31,6 +33,12 @@ typedef SetLocalDisplayOrigin = bool Function({
 /// `AltCrossNative.queryPeerScreens`/screen_sync_protocol.h).
 const _unknownRemoteSize = Size(420, 260);
 const _edgeGap = 160.0;
+
+/// Distância (em pixels reais do SO) até a borda de outra tela local pra
+/// ela "grudar" sozinha ao soltar o arrasto — só um empurrãozinho pra
+/// alinhar fácil, não trava o usuário: mais longe que isso, fica exatamente
+/// onde foi largada.
+const _snapThreshold = 40.0;
 const _canvasMargin = 240.0;
 const _edgeHotspotThickness = 18.0;
 const _highlightThickness = 10.0;
@@ -123,6 +131,7 @@ class _PendingSelection {
 /// arrasto impreciso "encostando" sozinho.
 class ArrangementScreen extends StatefulWidget {
   final HotZoneConfigStore store;
+  final LocalHotZoneStore localHotZoneStore;
   final List<PhysicalDisplay> Function() displayProvider;
   final LookupTrustedHost lookupHost;
   final QueryPeerScreens queryPeerScreens;
@@ -132,6 +141,7 @@ class ArrangementScreen extends StatefulWidget {
   ArrangementScreen({
     super.key,
     required this.store,
+    required this.localHotZoneStore,
     List<PhysicalDisplay> Function()? displayProvider,
     LookupTrustedHost? lookupHost,
     QueryPeerScreens? queryPeerScreens,
@@ -397,10 +407,33 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       return;
     }
     if (boxA.isLocal && boxB.isLocal) {
-      if (_repositionLocalBox(boxA, boxB, edgeB)) {
-        _replaceConnection(boxA, edgeA, boxB, edgeB);
-        _message = null;
+      // Tocar nas bordas define só a hotzone (mapeamento — igual ao caso
+      // remoto abaixo); NÃO mexe na posição real dos monitores. Quem faz
+      // isso é arrastar a tela de verdade (ver onPanEnd em
+      // _buildScreenBox), com snap.
+      if (boxA.displayId == null || boxB.displayId == null) {
+        _message =
+            'Não sei qual monitor é esse (sem id de tela) — não dá pra criar o salto de verdade.';
+        return;
       }
+      _replaceConnection(boxA, edgeA, boxB, edgeB);
+      // Bidirecional: quem cruza A por edgeA reaparece em B (por edgeB) e
+      // vice-versa — 2 telas "encostadas" (visual ou de verdade, tanto
+      // faz) valem nos 2 sentidos, igual telas físicas adjacentes de
+      // verdade se comportariam.
+      widget.localHotZoneStore.add(LocalHotZoneMapping(
+        sourceDisplayId: boxA.displayId!,
+        sourceEdge: edgeA,
+        targetDisplayId: boxB.displayId!,
+        targetEdge: edgeB,
+      ));
+      widget.localHotZoneStore.add(LocalHotZoneMapping(
+        sourceDisplayId: boxB.displayId!,
+        sourceEdge: edgeB,
+        targetDisplayId: boxA.displayId!,
+        targetEdge: edgeA,
+      ));
+      _message = null;
       return;
     }
 
@@ -451,55 +484,66 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
   }
 
   /// Encosta `moving` de verdade, no sistema operacional, na borda `moving`
-  /// que foi tocada — reposiciona o monitor físico real (não é só desenhar
-  /// mais perto no canvas), por isso "conectar 2 telas locais" agora arruma
-  /// de verdade em vez de ser só visual. Retorna false (e deixa `_message`
-  /// com o motivo) se não deu pra mover de verdade — nesse caso NENHUMA
-  /// conexão visual é registrada, pra não fingir que funcionou.
-  bool _repositionLocalBox(
-      _ScreenBox anchor, _ScreenBox moving, HotZoneEdge movingEdge) {
-    final displayId = moving.displayId;
+  /// Ao SOLTAR o arrasto de uma tela local, encaixa nas bordas de outra
+  /// tela local perto o bastante (magnético, ver `_snapLocalPosition`) e
+  /// manda pro SO de verdade essa posição final — sozinho ou encaixado, o
+  /// usuário pode largar onde quiser (ver AGENTS.md: nada de mock, tem que
+  /// mexer no SO de verdade). Não bloqueia o arrasto em si, só o resultado
+  /// ao soltar; se o SO recusar, deixa isso claro em `_message` em vez de
+  /// fingir que moveu.
+  void _commitLocalDrag(_ScreenBox box) {
+    final displayId = box.displayId;
     if (displayId == null) {
-      _message =
-          'Não sei qual monitor é esse (sem id de tela) — não dá pra mover de verdade.';
-      return false;
+      return;
     }
 
-    double newX = moving.position.dx;
-    double newY = moving.position.dy;
-    switch (movingEdge) {
-      case HotZoneEdge.left:
-        newX = anchor.rect.right;
-        break;
-      case HotZoneEdge.right:
-        newX = anchor.rect.left - moving.size.width;
-        break;
-      case HotZoneEdge.top:
-        newY = anchor.rect.bottom;
-        break;
-      case HotZoneEdge.bottom:
-        newY = anchor.rect.top - moving.size.height;
-        break;
-      default:
-        _message =
-            'Só dá pra encostar telas locais pelas bordas retas (cima/baixo/esquerda/direita).';
-        return false;
-    }
+    final target = _snapLocalPosition(box);
+    box.position = target;
 
     final ok = widget.setLocalDisplayOrigin(
       displayId: displayId,
-      x: newX.round(),
-      y: newY.round(),
+      x: target.dx.round(),
+      y: target.dy.round(),
     );
     if (!ok) {
       _message = 'O sistema operacional recusou mover esse monitor — no'
           ' macOS isso exige o App Sandbox desligado (ver'
           ' macos/Runner/*.entitlements).';
-      return false;
+      return;
     }
-
+    _message = null;
     _refreshLocalBoxesFromOs();
-    return true;
+  }
+
+  /// Encaixa `box` flush contra a tela local mais próxima, eixo por eixo,
+  /// só quando já está a menos de `_snapThreshold` de distância — fora
+  /// disso, a posição arrastada é respeitada exatamente como está (o
+  /// usuário pode deixar telas soltas, sem encostar em nada).
+  Offset _snapLocalPosition(_ScreenBox box) {
+    final rect = box.rect;
+    double? snappedX;
+    double? snappedY;
+    for (final other in _localBoxes) {
+      if (identical(other, box)) {
+        continue;
+      }
+      final otherRect = other.rect;
+      if (snappedX == null) {
+        if ((rect.left - otherRect.right).abs() < _snapThreshold) {
+          snappedX = otherRect.right;
+        } else if ((rect.right - otherRect.left).abs() < _snapThreshold) {
+          snappedX = otherRect.left - rect.width;
+        }
+      }
+      if (snappedY == null) {
+        if ((rect.top - otherRect.bottom).abs() < _snapThreshold) {
+          snappedY = otherRect.bottom;
+        } else if ((rect.bottom - otherRect.top).abs() < _snapThreshold) {
+          snappedY = otherRect.top - rect.height;
+        }
+      }
+    }
+    return Offset(snappedX ?? box.position.dx, snappedY ?? box.position.dy);
   }
 
   /// Depois de mover um monitor de verdade, relê os monitores reais do SO
@@ -655,6 +699,9 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
                 setState(() => box.position += details.delta / activeScale);
               },
               onPanEnd: (_) => setState(() {
+                if (box.isLocal) {
+                  _commitLocalDrag(box);
+                }
                 _frozenTotalBounds = null;
                 _frozenScale = null;
               }),

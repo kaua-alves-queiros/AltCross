@@ -67,4 +67,22 @@ altcross_platform_input_inject_mouse_button(altcross_mouse_button_t button,
 ALTCROSS_API void altcross_platform_input_inject_key(altcross_keycode_t key,
                                                        int down);
 
+/* Lê a posição ATUAL do cursor de verdade, na mesma convenção de
+ * coordenadas de altcross_displays_enumerate (Y pra baixo, ancorada no
+ * topo de TODAS as telas locais — ver displays.h). Diferente de
+ * altcross_platform_input_start, isso NÃO instala hook global nenhum — é
+ * uma leitura pontual, não intercepta nada de ninguém, segura de chamar a
+ * qualquer momento (inclusive em loop, ver o watcher de hotzone local no
+ * lado Dart). Retorna 0 em sucesso. */
+ALTCROSS_API int altcross_platform_get_cursor_position(int *out_x,
+                                                         int *out_y);
+
+/* Teleporta o cursor de verdade pra (x, y) (mesma convenção acima) — é o
+ * que faz o salto de hotzone entre 2 telas LOCAIS acontecer de fato. Também
+ * não precisa do hook global instalado: é uma chamada pontual (mesma
+ * primitiva que qualquer software de acessibilidade/automação usa pra
+ * mover o cursor), não fica "capturando" input contínuo de ninguém.
+ * Retorna 0 em sucesso. */
+ALTCROSS_API int altcross_platform_warp_cursor(int x, int y);
+
 #endif

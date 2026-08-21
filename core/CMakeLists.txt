@@ -88,6 +88,7 @@ add_executable(altcross_core_tests
     tests/test_pairing_protocol.c
     tests/test_screen_sync_protocol.c
     tests/test_discovery.c
+    tests/test_platform_input.c
 )
 target_link_libraries(altcross_core_tests PRIVATE altcross_core)
 target_include_directories(altcross_core_tests PRIVATE tests)
