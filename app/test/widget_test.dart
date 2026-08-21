@@ -4,6 +4,7 @@ import 'package:altcross_app/models/physical_display.dart';
 import 'package:altcross_app/models/screen_sync.dart';
 import 'package:altcross_app/services/settings_store.dart';
 import 'package:altcross_app/state/hot_zone_config_store.dart';
+import 'package:altcross_app/state/local_hotzone_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -12,6 +13,7 @@ void main() {
       (WidgetTester tester) async {
     await tester.pumpWidget(AltCrossApp(
       store: HotZoneConfigStore(),
+      localHotZoneStore: LocalHotZoneStore(),
       displayProvider: () => const [
         PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
       ],
@@ -19,6 +21,7 @@ void main() {
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (_) {},
       pollIncomingZone: () => null,
+      getCursorPosition: () => null,
     ));
 
     expect(find.text('AltCross'), findsOneWidget);
@@ -33,9 +36,11 @@ void main() {
 
     await tester.pumpWidget(AltCrossApp(
       store: HotZoneConfigStore(),
+      localHotZoneStore: LocalHotZoneStore(),
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (value) => saved = value,
       pollIncomingZone: () => null,
+      getCursorPosition: () => null,
     ));
 
     await tester.tap(find.text('Ajustes'));
@@ -58,8 +63,10 @@ void main() {
 
     await tester.pumpWidget(AltCrossApp(
       store: store,
+      localHotZoneStore: LocalHotZoneStore(),
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (_) {},
+      getCursorPosition: () => null,
       pollIncomingZone: () {
         if (polled) return null;
         polled = true;
