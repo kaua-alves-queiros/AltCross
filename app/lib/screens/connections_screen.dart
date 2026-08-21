@@ -28,6 +28,8 @@ typedef ConfirmPairing = Future<PairingResult> Function({
 
 typedef PollIncomingPairingRequest = IncomingPairingRequest? Function();
 
+typedef PollPairingCompleted = PairingCompleted? Function();
+
 /// Tela de conexões: mapeia os dispositivos já pareados (mesma fonte de
 /// dados da tela de arranjo, `HotZoneConfigStore`) e deixa parear com
 /// dispositivos encontrados na rede — de verdade, com troca de código de
@@ -38,6 +40,7 @@ class ConnectionsScreen extends StatefulWidget {
   final SendPairingRequest sendPairingRequest;
   final ConfirmPairing confirmPairing;
   final PollIncomingPairingRequest pollIncomingPairingRequest;
+  final PollPairingCompleted pollPairingCompleted;
 
   const ConnectionsScreen({
     super.key,
@@ -46,12 +49,15 @@ class ConnectionsScreen extends StatefulWidget {
     SendPairingRequest? sendPairingRequest,
     ConfirmPairing? confirmPairing,
     PollIncomingPairingRequest? pollIncomingPairingRequest,
+    PollPairingCompleted? pollPairingCompleted,
   })  : discoveryRunner = discoveryRunner ?? AltCrossNative.runDiscovery,
         sendPairingRequest =
             sendPairingRequest ?? AltCrossNative.sendPairingRequest,
         confirmPairing = confirmPairing ?? AltCrossNative.confirmPairing,
         pollIncomingPairingRequest = pollIncomingPairingRequest ??
-            AltCrossNative.pollIncomingPairingRequest;
+            AltCrossNative.pollIncomingPairingRequest,
+        pollPairingCompleted =
+            pollPairingCompleted ?? AltCrossNative.pollPairingCompleted;
 
   @override
   State<ConnectionsScreen> createState() => _ConnectionsScreenState();
@@ -67,12 +73,15 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
 
   Timer? _incomingPollTimer;
   bool _showingIncomingDialog = false;
+  String? _awaitingConfirmDeviceId;
 
   @override
   void initState() {
     super.initState();
-    _incomingPollTimer =
-        Timer.periodic(const Duration(milliseconds: 700), (_) => _pollIncoming());
+    _incomingPollTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
+      _pollIncoming();
+      _pollCompleted();
+    });
   }
 
   @override
@@ -90,6 +99,7 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
       return;
     }
     _showingIncomingDialog = true;
+    _awaitingConfirmDeviceId = incoming.requesterDeviceId;
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -106,7 +116,40 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
           ),
         ],
       ),
-    ).then((_) => _showingIncomingDialog = false);
+    ).then((_) {
+      _showingIncomingDialog = false;
+      _awaitingConfirmDeviceId = null;
+    });
+  }
+
+  /// Do lado de quem RECEBEU o pedido: sem isso, quem está sendo adicionado
+  /// nunca fica sabendo que o outro lado digitou o código certo — só quem
+  /// pediu o pareamento via `_startPairing` recebe esse retorno.
+  void _pollCompleted() {
+    if (!mounted) {
+      return;
+    }
+    final completed = widget.pollPairingCompleted();
+    if (completed == null) {
+      return;
+    }
+    if (_showingIncomingDialog &&
+        _awaitingConfirmDeviceId == completed.peerDeviceId &&
+        Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    setState(() {
+      try {
+        widget.store.add(HotZoneConfig(
+          edge: HotZoneEdge.right,
+          targetDeviceId: completed.peerDeviceId,
+          enabled: true,
+        ));
+      } on StateError {
+        /* já configurado numa borda — pareamento em si já foi salvo */
+      }
+      _message = 'Pareado com ${completed.peerName} com sucesso.';
+    });
   }
 
   Future<void> _runDiscovery() async {
