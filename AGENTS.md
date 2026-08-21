@@ -106,10 +106,11 @@ core/
 │       │                            # no CMakeLists) — testado nesta sessão com `nm` e
 │       │                            # rodando list_displays de verdade (achou os 2
 │       │                            # monitores reais desta máquina)
-│       ├── windows/platform_input.c # real, via SetWindowsHookEx/SendInput — NÃO
-│       │                            # compilado/testado nesta sessão (sem Windows)
+│       ├── windows/platform_input.c # real, via SetWindowsHookEx/SendInput — compila
+│       │                            # no MSVC num Windows real (build sem warnings);
+│       │                            # captura/injeção em runtime ainda não exercitada
 │       └── windows/displays.c       # real, via EnumDisplayMonitors — mesma ressalva
-│                                    # acima (não compilado/testado nesta sessão)
+│                                    # acima (compila; runtime ainda não exercitado)
 ├── tools/
 │   ├── altcrossd.c         # daemon real que liga tudo (só builda em macOS/Windows)
 │   │                       # — NUNCA rodar automaticamente, ver aviso no arquivo
@@ -132,8 +133,9 @@ especificação): lógica de decisão (`input_control`), protocolo de rede
 (`protocol`/`net_socket`), pareamento/identidade persistente (`pairing`) e descoberta
 (`discovery`) estão implementados e com testes passando — tudo isso é testável sem
 tocar em SO de verdade. A captura/injeção real (`platform_input`) está escrita e
-compila no macOS; a versão Windows está escrita mas **nunca compilada nem testada**
-(sem máquina Windows nesta sessão). A enumeração de monitores físicos (`displays`) está
+compila no macOS; a versão Windows também compila no MSVC e o suite de testes do
+Core passa num Windows real (build + ctest verificados), mas a captura/injeção em
+runtime ainda não foi exercitada de verdade. A enumeração de monitores físicos (`displays`) está
 implementada, compila no macOS e **já tem FFI real ligado na tela de arranjo**
 (`app/lib/screens/arrangement_screen.dart`), que mostra as telas físicas de verdade
 desta máquina. A descoberta na rede (`discovery`) também já tem FFI real ligado na
@@ -269,9 +271,10 @@ rápida que sirva para o que você está fazendo antes de subir para a próxima:
      dá `add_subdirectory` no `core/` e instala o `altcross_core.dll` junto do
      executável (mesma pasta, via a regra `install(...)` que o Flutter já usa pros
      plugins). Basta rodar `flutter run -d windows` normalmente — o CMake do próprio
-     Flutter builda o Core junto, nada extra a fazer. **Ainda não testado numa máquina
-     Windows de verdade** (só foi possível revisar o CMake nesta sessão, que rodou em
-     macOS) — valide num Windows real antes de confiar 100%.
+     Flutter builda o Core junto, nada extra a fazer. **Validado num Windows real**:
+     `flutter build windows --debug` builda app + `altcross_core.dll` sem warnings
+     (os flags de warning do core são escolhidos por compilador — GCC/Clang vs.
+     MSVC, ver `core/CMakeLists.txt`).
    - **macOS — integração direta via build phase no Xcode, sem script**: o
      `macos/Runner.xcodeproj` tem um Run Script Build Phase (`Build AltCross Core
      (CMake)`) no target `Runner` que builda `core/` com CMake e copia

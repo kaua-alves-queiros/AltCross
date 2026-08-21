@@ -1,3 +1,8 @@
+#if defined(_WIN32)
+/* Precisa vir antes da primeira inclusão de <stdlib.h> (direta ou via
+ * header próprio), senão rand_s não é declarado (C4013). */
+#define _CRT_RAND_S
+#endif
 #include "altcross/pairing.h"
 
 #include <stdint.h>
@@ -9,8 +14,6 @@
 /* arc4random_buf já vem de <stdlib.h> no macOS. */
 static void random_bytes(uint8_t *buf, size_t len) { arc4random_buf(buf, len); }
 #elif defined(_WIN32)
-#define _CRT_RAND_S
-#include <stdlib.h>
 static void random_bytes(uint8_t *buf, size_t len) {
     size_t i = 0;
     while (i < len) {
