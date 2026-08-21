@@ -8,6 +8,12 @@ import '../models/hot_zone.dart';
 class HotZoneConfigStore {
   final List<HotZoneConfig> _zones = [];
 
+  /// Chamado depois de qualquer mutação bem-sucedida, com a lista já
+  /// atualizada — é assim que quem quiser persistir em disco (ver
+  /// `HotZoneConfigPersistence`) salva sozinho, sem acoplar este store
+  /// (usado puro, sem I/O, em dezenas de testes) a arquivo.
+  void Function(List<HotZoneConfig> zones)? onChanged;
+
   List<HotZoneConfig> get zones => List.unmodifiable(_zones);
 
   void add(HotZoneConfig zone) {
@@ -20,10 +26,12 @@ class HotZoneConfigStore {
           'Já existe uma hotzone habilitada para ${zone.edge}');
     }
     _zones.add(zone);
+    onChanged?.call(zones);
   }
 
   void remove(String targetDeviceId) {
     _zones.removeWhere((z) => z.targetDeviceId == targetDeviceId);
+    onChanged?.call(zones);
   }
 
   void setEnabled(String targetDeviceId, bool enabled) {
@@ -32,6 +40,7 @@ class HotZoneConfigStore {
         _zones[i] = _zones[i].copyWith(enabled: enabled);
       }
     }
+    onChanged?.call(zones);
   }
 
   HotZoneConfig? resolve(HotZoneEdge edge) {
