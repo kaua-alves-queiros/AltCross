@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(altcross_core C)
 
+if(APPLE)
+    # displays.m usa NSScreen (AppKit), só dá pra chamar de Objective-C.
+    enable_language(OBJC)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -21,10 +26,16 @@ set(ALTCROSS_CORE_SOURCES
 # entra no build (esses são os únicos SOs no escopo de desenvolvimento atual).
 set(ALTCROSS_PLATFORM_LIBS "")
 if(APPLE)
-    list(APPEND ALTCROSS_CORE_SOURCES src/platform/macos/platform_input.c)
-    list(APPEND ALTCROSS_PLATFORM_LIBS "-framework ApplicationServices")
+    list(APPEND ALTCROSS_CORE_SOURCES
+        src/platform/macos/platform_input.c
+        src/platform/macos/displays.m
+    )
+    list(APPEND ALTCROSS_PLATFORM_LIBS "-framework ApplicationServices" "-framework AppKit")
 elseif(WIN32)
-    list(APPEND ALTCROSS_CORE_SOURCES src/platform/windows/platform_input.c)
+    list(APPEND ALTCROSS_CORE_SOURCES
+        src/platform/windows/platform_input.c
+        src/platform/windows/displays.c
+    )
     list(APPEND ALTCROSS_PLATFORM_LIBS user32 ws2_32)
 endif()
 
@@ -69,4 +80,9 @@ add_test(NAME altcross_core_tests COMMAND altcross_core_tests)
 if(APPLE OR WIN32)
     add_executable(altcrossd tools/altcrossd.c)
     target_link_libraries(altcrossd PRIVATE altcross_core)
+
+    # Ferramenta segura (só lê monitores, não captura input nem abre rede) —
+    # pode rodar automaticamente/manualmente sem aviso nenhum.
+    add_executable(list_displays tools/list_displays.c)
+    target_link_libraries(list_displays PRIVATE altcross_core)
 endif()
