@@ -41,9 +41,14 @@ ALTCROSS_API int altcross_heartbeat_decode(
 
 /* Inicia o monitor em background thread. Carrega o store de store_path,
  * envia pings periódicos e chama callback quando um peer fica
- * online/offline. Retorna 0 em sucesso. */
+ * online/offline. my_device_id é a identidade estável desta máquina
+ * (altcross_pairing_local_identity_load_or_create) resolvida pelo chamador,
+ * mesmo padrão de altcross_handoff_start — os pings saem com esse id e os
+ * pongs são filtrados/casados por ele, então precisa ser o mesmo id que o
+ * pairing store registra dos peers. Retorna 0 em sucesso. */
 ALTCROSS_API int
 altcross_connection_monitor_start(const char *store_path,
+                                   const char *my_device_id,
                                    altcross_connection_status_cb callback,
                                    void *user_data);
 

@@ -209,13 +209,16 @@ static void populate_peers_from_store(const altcross_pairing_store_t *store) {
 }
 
 int altcross_connection_monitor_start(const char *store_path,
+                                       const char *my_device_id,
                                        altcross_connection_status_cb callback,
                                        void *user_data) {
     if (g_running) {
         return 1;
     }
-
-    altcross_pairing_local_identity_load_or_create(NULL, g_local_id);
+    if (!my_device_id || my_device_id[0] == '\0') {
+        return 1;
+    }
+    snprintf(g_local_id, sizeof(g_local_id), "%s", my_device_id);
 
     g_sock = altcross_socket_open_udp(ALTCROSS_HEARTBEAT_PORT);
     if (!g_sock) {

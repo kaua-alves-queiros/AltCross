@@ -958,9 +958,10 @@ class AltCrossNative {
     _statusCallable = callable;
 
     final storePath = _pairingStorePath().toNativeUtf8();
+    final deviceId = localDeviceId().toNativeUtf8();
     try {
       final rc =
-          start(storePath, callable.nativeFunction, nullptr);
+          start(storePath, deviceId, callable.nativeFunction, nullptr);
       if (rc == 0) {
         _monitorRunning = true;
       } else {
@@ -969,6 +970,7 @@ class AltCrossNative {
       }
     } finally {
       calloc.free(storePath);
+      calloc.free(deviceId);
     }
   }
 
@@ -1014,10 +1016,12 @@ typedef _StatusCallbackNative = Void Function(
 
 typedef _StartConnectionMonitorNative = Int32 Function(
     Pointer<Utf8> storePath,
+    Pointer<Utf8> myDeviceId,
     Pointer<NativeFunction<_StatusCallbackNative>> callback,
     Pointer<Void> userData);
 typedef _StartConnectionMonitorDart = int Function(
     Pointer<Utf8> storePath,
+    Pointer<Utf8> myDeviceId,
     Pointer<NativeFunction<_StatusCallbackNative>> callback,
     Pointer<Void> userData);
 
