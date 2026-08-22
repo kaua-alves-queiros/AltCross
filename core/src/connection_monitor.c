@@ -195,12 +195,12 @@ static void populate_peers_from_store(const altcross_pairing_store_t *store) {
         if (dev->device_id[0] == '\0') {
             continue;
         }
-        strncpy(g_peers[g_peer_count].device_id, dev->device_id,
-                ALTCROSS_DEVICE_ID_SIZE - 1);
-        g_peers[g_peer_count].device_id[ALTCROSS_DEVICE_ID_SIZE - 1] = '\0';
-        strncpy(g_peers[g_peer_count].host, dev->last_host,
-                ALTCROSS_HOST_SIZE - 1);
-        g_peers[g_peer_count].host[ALTCROSS_HOST_SIZE - 1] = '\0';
+        /* snprintf trunca e termina em '\0' sem o warning de depreca��o
+         * do strncpy no MSVC (C4996). */
+        snprintf(g_peers[g_peer_count].device_id, ALTCROSS_DEVICE_ID_SIZE,
+                 "%s", dev->device_id);
+        snprintf(g_peers[g_peer_count].host, ALTCROSS_HOST_SIZE, "%s",
+                 dev->last_host);
         g_peers[g_peer_count].port = dev->last_port;
         g_peers[g_peer_count].online = 0;
         g_peers[g_peer_count].last_pong_ms = 0;

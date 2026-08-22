@@ -446,12 +446,14 @@ verdade testável em Dart/C puro (nível 1) antes de expor via FFI (nível 3).
 
 - **Nunca commite direto na main.** Toda mudança deve ir via branch + pull request.
   Fluxo obrigatório: crie uma branch (`git checkout -b <tipo>/<descrição>`), faça as
-  alterações, commite na branch, faça push e abra um PR contra `main`. O usuário revisa
-  e faz merge. Exemplos de nomes de branch: `feat/virtual-monitor`, `fix/hotzone-boundary`,
-  `refactor/protocol-parsing`.
+  alterações, commite na branch, faça push e abra um PR contra `dev`. O usuário revisa
+  e faz merge. Após o merge, o workflow de release dispara automaticamente e faz o
+  merge `dev` → `main` com o tag de versão. Exemplos de nomes de branch: 
+  `feat/virtual-monitor`, `fix/hotzone-boundary`, `refactor/protocol-parsing`.
 - **Após o merge do PR, delete a branch feature.** `git branch -d <branch>` local e
   `git push origin --delete <branch>` remoto. **NUNCA delete a branch `main`** — sempre
   verifique o nome da branch antes de rodar `git branch -d` ou `git push origin --delete`.
+  O branch `dev` serve como ambiente de integração antes do lançamento para `main`.
 - O repositório já está estruturado (`app/` Flutter, `core/` motor em C, git
   inicializado com remoto no GitHub — ver seção "Estrutura dos Projetos" acima). Não
   proponha recriar essa estrutura do zero; ao adicionar algo novo, siga as convenções

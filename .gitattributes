@@ -1,0 +1,6 @@
+# Arquivos gerados pelo tooling do Flutter: fixa LF pra bater com o que o
+# flutter grava, senão (com core.autocrlf=true) eles aparecem como modificados
+# pra sempre sem nenhuma diferença de conteúdo.
+app/linux/flutter/generated_* text eol=lf
+app/macos/Flutter/GeneratedPluginRegistrant.swift text eol=lf
+app/windows/flutter/generated_* text eol=lf
