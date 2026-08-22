@@ -2,14 +2,14 @@ name: Release
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [main]
 
 jobs:
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
