@@ -61,4 +61,15 @@ ALTCROSS_API int altcross_handoff_is_active(void);
  * handoff parado (sempre 0 nesse caso). */
 ALTCROSS_API int altcross_handoff_is_remote(void);
 
+/* Failsafe: avisa que device_id (peer pareado monitorado pelo
+ * connection_monitor) acabou de cair offline. Se esse for o dispositivo que
+ * está controlando o input local agora (altcross_handoff_is_remote() e
+ * active_device_id == device_id), força a liberação imediata pro local —
+ * mesma ação da tecla de pânico (Ctrl+Esc, ver on_panic_key). Sem isso, se o
+ * link cair no meio de uma sessão remota o mouse/teclado local ficam presos
+ * capturados sem nenhuma borda pra devolver o controle. Não faz nada se o
+ * handoff está parado, se o controle já é local, ou se device_id não é quem
+ * está com o controle agora. */
+ALTCROSS_API void altcross_handoff_notify_peer_offline(const char *device_id);
+
 #endif

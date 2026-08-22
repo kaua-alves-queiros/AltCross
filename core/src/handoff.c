@@ -372,3 +372,13 @@ int altcross_handoff_is_remote(void) {
     }
     return altcross_input_control_is_remote(&g_ic);
 }
+
+void altcross_handoff_notify_peer_offline(const char *device_id) {
+    if (!g_running || !altcross_input_control_is_remote(&g_ic)) {
+        return;
+    }
+    if (device_index_for(device_id) != g_ic.active_device_id) {
+        return;
+    }
+    on_panic_key(NULL);
+}

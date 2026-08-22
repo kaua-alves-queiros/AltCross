@@ -15,7 +15,18 @@ class ConnectionStatusNotifier extends ChangeNotifier {
   /// Inicia o monitoramento. Chamar uma única vez (ex.: no main ou
   /// ao montar o MaterialApp com [NavigatorState]).
   void start() {
-    AltCrossNative.startConnectionMonitor(onStatusChange: updateStatus);
+    AltCrossNative.startConnectionMonitor(onStatusChange: (deviceId, online) {
+      if (!online) {
+        // Failsafe: se for esse peer que está controlando o input local
+        // agora (handoff remoto ativo), o Core solta o controle na hora —
+        // sem isso, o mouse/teclado local ficam presos capturados se o link
+        // cair no meio de uma sessão remota, sem nenhuma borda pra devolver
+        // o controle. Fica aqui (não em [updateStatus]) pra esse método
+        // continuar puro e testável sem precisar do FFI de verdade.
+        AltCrossNative.notifyPeerOffline(deviceId);
+      }
+      updateStatus(deviceId, online);
+    });
   }
 
   /// Aplica uma mudança de status de peer — chamado pelo callback nativo em

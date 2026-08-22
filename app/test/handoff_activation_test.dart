@@ -127,6 +127,46 @@ void main() {
     expect(startedZones!.single.targetScreenHeight, 1440);
   });
 
+  test(
+      'alvo com múltiplas telas usa só a tela apontada por targetScreenIndex, '
+      'nunca a fusão de todas', () async {
+    final store = HotZoneConfigStore();
+    store.add(const HotZoneConfig(
+      edge: HotZoneEdge.right,
+      targetDeviceId: 'pc-windows',
+      enabled: true,
+      targetScreenIndex: 1,
+    ));
+
+    List<HandoffZoneSpec>? startedZones;
+    final result = await activateHandoff(
+      store: store,
+      lookupHost: (deviceId) =>
+          deviceId == 'pc-windows' ? '192.168.0.42' : null,
+      queryPeerScreens: (peerHost) async => const [
+        PhysicalDisplay(
+            x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
+        PhysicalDisplay(
+            x: 1920, y: 0, width: 2560, height: 1440, isPrimary: false),
+      ],
+      localDisplaysProvider: () => _localDisplays,
+      startHandoff: ({
+        required localScreenWidth,
+        required localScreenHeight,
+        required zones,
+      }) {
+        startedZones = zones;
+        return true;
+      },
+    );
+
+    expect(result.started, isTrue);
+    // Se fundisse as 2 telas do alvo, isso daria 4480x1440 (soma das
+    // larguras) — o bug que travava o controle local ao trocar de máquina.
+    expect(startedZones!.single.targetScreenWidth, 2560);
+    expect(startedZones!.single.targetScreenHeight, 1440);
+  });
+
   test('startHandoff recusando (ex.: sem permissão) reporta o motivo',
       () async {
     final store = HotZoneConfigStore();
