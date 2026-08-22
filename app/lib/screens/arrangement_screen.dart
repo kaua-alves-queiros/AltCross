@@ -74,16 +74,35 @@ class _ScreenBox {
   /// dá pra mover um monitor de outra máquina daqui.
   final int? displayId;
 
+  /// Índice, na lista de telas reais de `deviceId` (ver `_remoteDisplays`),
+  /// de QUAL tela dele esta caixa representa — cada monitor do dispositivo
+  /// remoto vira sua própria `_ScreenBox` clicável, nunca uma fusão de
+  /// todas (ver `HotZoneConfig.targetScreenIndex`: é tocar na borda de UMA
+  /// caixa remota específica que decide isso, direto). Null antes da 1ª
+  /// resposta da rede chegar (placeholder "carregando…", só 1 caixa) ou
+  /// pra telas locais (não se aplica).
+  final int? remoteScreenIndex;
+
   _ScreenBox({
     required this.label,
     required this.position,
     required this.size,
     this.deviceId,
     this.displayId,
+    this.remoteScreenIndex,
   });
 
   bool get isLocal => deviceId == null;
   Rect get rect => position & size;
+
+  /// Chave estável desta caixa no canvas — telas locais por label (único
+  /// entre elas), remotas por deviceId (+ índice da tela quando já se sabe
+  /// quantas telas reais o dispositivo tem, ver [remoteScreenIndex]).
+  String get boxKey => isLocal
+      ? 'local-box-$label'
+      : remoteScreenIndex == null
+          ? 'device-box-$deviceId'
+          : 'device-box-$deviceId-$remoteScreenIndex';
 }
 
 /// Uma conexão de verdade entre a borda de uma tela e a borda de outra —
@@ -163,6 +182,11 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
   _PendingSelection? _pendingSelection;
   String? _message;
 
+  /// Últimas telas físicas reais conhecidas de cada dispositivo remoto —
+  /// preenchido em [_fetchRealScreens]/[_rebuildRemoteBoxesForDevice], é a
+  /// fonte usada pra saber quantas caixas desenhar por dispositivo.
+  final Map<String, List<PhysicalDisplay>> _remoteDisplays = {};
+
   // Zoom/enquadramento travado durante um arraste — sem isso, mover uma
   // tela muda o retângulo total, que muda a escala, e todas as telas
   // parecem se mexer sozinhas.
@@ -238,18 +262,8 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
     }
 
     setState(() {
-      final box = _remoteBoxes.firstWhere((b) => b.deviceId == deviceId,
-          orElse: () => _ScreenBox(
-              deviceId: deviceId, label: deviceId, position: Offset.zero, size: _unknownRemoteSize));
-      var bounds = displays.first.rect;
-      for (final d in displays.skip(1)) {
-        bounds = bounds.expandToInclude(d.rect);
-      }
-      box.size = bounds.size;
-      box.label = displays.length > 1
-          ? '$deviceId\n${bounds.width.round()}×${bounds.height.round()}'
-              ' · ${displays.length} telas'
-          : '$deviceId\n${bounds.width.round()}×${bounds.height.round()}';
+      _remoteDisplays[deviceId] = displays;
+      _rebuildRemoteBoxesForDevice(deviceId, displays);
     });
   }
 
@@ -258,6 +272,68 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       if (box.deviceId == deviceId) {
         box.label = label;
       }
+    }
+  }
+
+  /// Substitui a(s) caixa(s) de `deviceId` no canvas por UMA caixa por tela
+  /// FÍSICA real dele (`displays`, na mesma ordem que `queryPeerScreens`
+  /// devolve — essa ordem é o que `HotZoneConfig.targetScreenIndex`
+  /// referencia). Preserva onde o usuário tinha arrastado o dispositivo
+  /// (âncora = posição da 1ª caixa já existente) e mantém as telas reais
+  /// entre si na MESMA disposição relativa que elas têm de verdade no
+  /// dispositivo remoto (só traduzida pro espaço do canvas, ver `d.x`/`d.y`
+  /// abaixo) — nunca uma fusão. Reconecta as zonas já salvas na tela
+  /// específica que cada uma mira.
+  void _rebuildRemoteBoxesForDevice(
+      String deviceId, List<PhysicalDisplay> displays) {
+    final existing = _remoteBoxes.where((b) => b.deviceId == deviceId);
+    final anchor = existing.isNotEmpty
+        ? existing.first.position
+        : _anchorFor(HotZoneEdge.none, _unknownRemoteSize);
+    final baseX = displays.first.x;
+    final baseY = displays.first.y;
+
+    _connections
+        .removeWhere((c) => c.boxA.deviceId == deviceId || c.boxB.deviceId == deviceId);
+    _remoteBoxes.removeWhere((b) => b.deviceId == deviceId);
+    if (_pendingSelection?.box.deviceId == deviceId) {
+      _pendingSelection = null;
+    }
+
+    final newBoxes = <_ScreenBox>[
+      for (var i = 0; i < displays.length; i++)
+        _ScreenBox(
+          deviceId: deviceId,
+          remoteScreenIndex: i,
+          label: displays.length > 1
+              ? '$deviceId\n${displays[i].width.round()}×'
+                  '${displays[i].height.round()}'
+                  '${displays[i].isPrimary ? ' · principal' : ''}'
+              : '$deviceId\n${displays[i].width.round()}×'
+                  '${displays[i].height.round()}',
+          position:
+              anchor + Offset(displays[i].x - baseX, displays[i].y - baseY),
+          size: Size(displays[i].width, displays[i].height),
+        ),
+    ];
+    _remoteBoxes.addAll(newBoxes);
+
+    for (final zone in widget.store.zones) {
+      if (zone.targetDeviceId != deviceId) {
+        continue;
+      }
+      final localBox = _firstLocalBoxForOuterEdge(zone.edge);
+      if (localBox == null) {
+        continue;
+      }
+      final idx = zone.targetScreenIndex.clamp(0, newBoxes.length - 1);
+      _connections.add(_Connection(
+        boxA: localBox,
+        edgeA: zone.edge,
+        boxB: newBoxes[idx],
+        edgeB: oppositeEdge(zone.edge),
+        color: _nextColor(),
+      ));
     }
   }
 
@@ -375,6 +451,10 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       _message =
           '$deviceId: toque numa borda de uma tela local e depois numa borda dele pra conectar.';
     });
+    // Busca já de cara as telas reais dele — se tiver mais de 1 monitor,
+    // esse placeholder único vira N caixas (uma por tela) antes mesmo do
+    // usuário tentar conectar, pra ele já escolher a certa tocando nela.
+    _fetchRealScreens(deviceId);
   }
 
   void _onEdgeTapped(_ScreenBox box, HotZoneEdge edge) {
@@ -446,16 +526,24 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       return;
     }
 
+    // Qual tela remota mira é decidido pela caixa que o usuário tocou —
+    // cada monitor real de um dispositivo é sua própria caixa clicável
+    // (ver _rebuildRemoteBoxesForDevice), nunca uma fusão de todas. Só cai
+    // em 0 (a tela primária/única, ver AGENTS.md) enquanto as telas reais
+    // dele ainda não chegaram da rede (placeholder único).
+    final targetScreenIndex = remoteBox.remoteScreenIndex ?? 0;
+
     widget.store.remove(remoteBox.deviceId!);
     try {
       widget.store.add(HotZoneConfig(
         edge: localEdge,
         targetDeviceId: remoteBox.deviceId!,
         enabled: true,
+        targetScreenIndex: targetScreenIndex,
       ));
       _message = null;
       _replaceConnection(localBox, localEdge, remoteBox, remoteEdge);
-      _pushZoneIfPaired(remoteBox.deviceId!, localEdge);
+      _pushZoneIfPaired(remoteBox.deviceId!, localEdge, targetScreenIndex);
     } on StateError catch (e) {
       _message = e.message;
     }
@@ -467,7 +555,8 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
   /// host precisar configurar a mesma ligação manualmente 2 vezes. Sem
   /// host conhecido (dispositivo nunca pareado, só digitado manualmente)
   /// não tem pra onde mandar — fica só configurado deste lado mesmo.
-  void _pushZoneIfPaired(String deviceId, HotZoneEdge localEdge) {
+  void _pushZoneIfPaired(
+      String deviceId, HotZoneEdge localEdge, int targetScreenIndex) {
     final host = widget.lookupHost(deviceId);
     if (host == null) {
       return;
@@ -476,7 +565,7 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
       peerHost: host,
       myName: Platform.localHostname,
       myEdge: localEdge,
-      targetScreenIndex: 0,
+      targetScreenIndex: targetScreenIndex,
     );
   }
 
@@ -568,12 +657,17 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
 
   void _removeDevice(String deviceId) {
     setState(() {
-      final box = _remoteBoxes.firstWhere((b) => b.deviceId == deviceId);
-      _connections.removeWhere((c) => c.references(box));
-      if (identical(_pendingSelection?.box, box)) {
+      // Um dispositivo com N telas reais vira N caixas (ver
+      // _rebuildRemoteBoxesForDevice) — remover precisa tirar todas elas,
+      // não só a primeira, senão as outras ficam órfãs no canvas.
+      for (final box in _remoteBoxes.where((b) => b.deviceId == deviceId)) {
+        _connections.removeWhere((c) => c.references(box));
+      }
+      if (_pendingSelection?.box.deviceId == deviceId) {
         _pendingSelection = null;
       }
-      _remoteBoxes.remove(box);
+      _remoteBoxes.removeWhere((b) => b.deviceId == deviceId);
+      _remoteDisplays.remove(deviceId);
       widget.store.remove(deviceId);
     });
   }
@@ -681,7 +775,7 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
   Widget _buildScreenBox(_ScreenBox box, Rect totalBounds, double scale) {
     final screenRect = _toScreenRect(box.rect, totalBounds, scale);
     return Positioned.fromRect(
-      key: Key(box.isLocal ? 'local-box-${box.label}' : 'device-box-${box.deviceId}'),
+      key: Key(box.boxKey),
       rect: screenRect,
       child: Stack(
         children: [
@@ -704,7 +798,15 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
               }),
               child: _MonitorFrame(
                 label: box.label,
-                trailing: box.isLocal
+                // Um dispositivo com N telas vira N caixas (ver
+                // _rebuildRemoteBoxesForDevice) — o botão de remover só
+                // aparece numa delas (a 1ª/tela 0), senão a mesma key
+                // `remove-device-$deviceId` se repetiria em N botões.
+                // _removeDevice já tira o dispositivo inteiro (todas as
+                // telas dele), então isso remove tudo de qualquer uma.
+                trailing: box.isLocal ||
+                        (box.remoteScreenIndex != null &&
+                            box.remoteScreenIndex != 0)
                     ? null
                     : IconButton(
                         key: Key('remove-device-${box.deviceId}'),
@@ -728,8 +830,7 @@ class _ArrangementScreenState extends State<ArrangementScreen> {
     final hotspot = MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-        key: Key(
-            '${box.isLocal ? 'local-box-${box.label}' : 'device-box-${box.deviceId}'}-edge-${edge.name}'),
+        key: Key('${box.boxKey}-edge-${edge.name}'),
         behavior: HitTestBehavior.opaque,
         onTap: () => _onEdgeTapped(box, edge),
         child: selected

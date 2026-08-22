@@ -47,15 +47,18 @@ Future<HandoffActivationResult> activateHandoff({
       skipped.add(zone.targetDeviceId);
       continue;
     }
-    var bounds = displays.first.rect;
-    for (final d in displays.skip(1)) {
-      bounds = bounds.expandToInclude(d.rect);
-    }
+    // Usa a tela ESPECÍFICA que essa borda mira (zone.targetScreenIndex),
+    // nunca a fusão de todas as telas do alvo — um alvo com N monitores não
+    // é "1 tela gigante" (isso quebra a entrada/saída do cursor e pode
+    // deixar o controle preso, já que o core nunca alcança o limite de uma
+    // caixa combinada maior que qualquer tela física real dele).
+    final targetIndex = zone.targetScreenIndex.clamp(0, displays.length - 1);
+    final target = displays[targetIndex];
     zoneSpecs.add(HandoffZoneSpec(
       edge: zone.edge,
       targetDeviceId: zone.targetDeviceId,
-      targetScreenWidth: bounds.width,
-      targetScreenHeight: bounds.height,
+      targetScreenWidth: target.rect.width,
+      targetScreenHeight: target.rect.height,
     ));
   }
 

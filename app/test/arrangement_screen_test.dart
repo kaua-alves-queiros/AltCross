@@ -293,6 +293,42 @@ void main() {
     expect(pushed.single['myEdge'], HotZoneEdge.right);
   });
 
+  testWidgets(
+      'dispositivo com 2 monitores vira 2 caixas separadas — a borda mira a'
+      ' tela certa, não uma fusão das 2', (tester) async {
+    final store = HotZoneConfigStore();
+
+    await pumpScreen(
+      tester,
+      store,
+      lookupHost: (deviceId) =>
+          deviceId == 'pc-windows' ? '192.168.0.42' : null,
+      queryPeerScreens: (peerHost) async => const [
+        PhysicalDisplay(
+            x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
+        PhysicalDisplay(
+            x: 1920, y: 0, width: 2560, height: 1440, isPrimary: false),
+      ],
+    );
+    await addDevice(tester, 'pc-windows');
+
+    // cada monitor real vira sua própria caixa clicável no canvas — nunca
+    // uma caixa só fundindo as 2 (era esse o bug que travava o handoff).
+    expect(find.byKey(const Key('device-box-pc-windows-0')), findsOneWidget);
+    expect(find.byKey(const Key('device-box-pc-windows-1')), findsOneWidget);
+    expect(find.byKey(const Key('device-box-pc-windows')), findsNothing);
+
+    await tester.tap(find.byKey(_localEdgeKey(HotZoneEdge.right)));
+    await tester.pump();
+    await tester.tap(
+        find.byKey(const Key('device-box-pc-windows-1-edge-left')));
+    await tester.pumpAndSettle();
+
+    expect(store.zones, hasLength(1));
+    expect(store.zones.single.targetDeviceId, 'pc-windows');
+    expect(store.zones.single.targetScreenIndex, 1);
+  });
+
   testWidgets('remover dispositivo tira do canvas e do store',
       (tester) async {
     final store = HotZoneConfigStore();
