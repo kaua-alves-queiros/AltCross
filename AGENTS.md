@@ -449,7 +449,10 @@ verdade testável em Dart/C puro (nível 1) antes de expor via FFI (nível 3).
   alterações, commite na branch, faça push e abra um PR contra `dev`. **O agente mesmo
   faz o merge do PR no `dev`** (merge commit, sem revisão externa) **e deleta a branch
   feature em seguida** — não deixar o PR aberto esperando o usuário. Após o merge, o
-  workflow de release dispara automaticamente (build e teste no dev). Exemplos de nomes
+  CI de testes dispara automaticamente no `dev` (`ci.yml`: ctest do Core + analyze/test/
+  build do Flutter); a **release** (artefatos + GitHub Release) só é gerada quando o
+  código chega na `main` (`release.yml`), ou seja, quando o usuário faz o merge manual
+  `dev → main`. Exemplos de nomes
   de branch: `feat/virtual-monitor`, `fix/hotzone-boundary`, `refactor/protocol-parching`.
 - **Após o merge do PR, delete a branch feature.** `git branch -d <branch>` local e
   `git push origin --delete <branch>` remoto. **NUNCA delete a branch `main`** — sempre
