@@ -13,6 +13,10 @@ Software KVM for sharing keyboard, mouse, display, audio, and clipboard across m
 - **Device discovery** — automatic LAN detection via mDNS broadcast
 - **Wake-on-LAN** — remote power management (wake, sleep, restart, shutdown)
 
+## Panic key
+
+If control gets stuck on a remote machine (e.g. the hotzone edge to switch back never triggers), press **Ctrl+Esc** — it's a hardcoded, OS-level shortcut that forces keyboard/mouse control back to the local machine immediately, regardless of cursor position or connection state. It works even while input is fully captured.
+
 ## Architecture
 
 ```

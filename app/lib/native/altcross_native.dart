@@ -127,6 +127,11 @@ typedef _HandoffIsRemoteDart = int Function();
 typedef _HandoffIsActiveNative = Int32 Function();
 typedef _HandoffIsActiveDart = int Function();
 
+typedef _HandoffNotifyPeerOfflineNative = Void Function(
+    Pointer<Utf8> deviceId);
+typedef _HandoffNotifyPeerOfflineDart = void Function(
+    Pointer<Utf8> deviceId);
+
 typedef _LoadIdentityNative = Int32 Function(
     Pointer<Utf8> path, Pointer<Uint8> outDeviceId);
 typedef _LoadIdentityDart = int Function(
@@ -442,6 +447,27 @@ class AltCrossNative {
         .lookup<NativeFunction<_HandoffStopNative>>('altcross_handoff_stop')
         .asFunction<_HandoffStopDart>();
     stop();
+  }
+
+  /// Failsafe: avisa o Core que [deviceId] (peer pareado monitorado pelo
+  /// connection monitor) caiu offline. Se for esse dispositivo que está
+  /// controlando o input local agora, o Core força o retorno imediato do
+  /// controle pro local — mesma ação da tecla de pânico (Ctrl+Esc). Chamado
+  /// pelo callback nativo em [ConnectionStatusNotifier.start] quando
+  /// `online` vira false (não em `updateStatus`, que precisa continuar puro
+  /// e testável sem o FFI de verdade), senão o mouse/teclado ficam presos
+  /// capturados se o link cair no meio de uma sessão remota.
+  static void notifyPeerOffline(String deviceId) {
+    final notify = _library()
+        .lookup<NativeFunction<_HandoffNotifyPeerOfflineNative>>(
+            'altcross_handoff_notify_peer_offline')
+        .asFunction<_HandoffNotifyPeerOfflineDart>();
+    final deviceIdNative = deviceId.toNativeUtf8();
+    try {
+      notify(deviceIdNative);
+    } finally {
+      calloc.free(deviceIdNative);
+    }
   }
 
   /// true se o controle está AGORA em outro dispositivo (mouse/teclado
