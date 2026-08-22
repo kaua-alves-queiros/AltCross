@@ -22,6 +22,17 @@ typedef LookupTrustedHost = String? Function(String deviceId);
 typedef QueryPeerScreens = Future<List<PhysicalDisplay>> Function(
     String peerHost);
 
+/// Idem, mas pro handoff: `ConnectionsScreen` (checkbox/ativação manual) e
+/// `services/handoff_activation.dart` (ativação automática ao abrir o app)
+/// precisam das duas.
+typedef StartHandoff = bool Function({
+  required double localScreenWidth,
+  required double localScreenHeight,
+  required List<HandoffZoneSpec> zones,
+});
+typedef StopHandoff = void Function();
+typedef IsHandoffRemote = bool Function();
+
 /// Espelha `altcross_display_t` de core/include/altcross/displays.h — os
 /// campos e a ordem têm que bater exatamente com o struct em C.
 final class _NativeDisplay extends Struct {
