@@ -26,6 +26,7 @@ void main() {
       saveThemePreference: (_) {},
       pollIncomingZone: () => null,
       getCursorPosition: () => null,
+      loadHandoffEnabled: () => false,
     ));
 
     expect(find.text('AltCross'), findsOneWidget);
@@ -48,6 +49,7 @@ void main() {
       saveThemePreference: (value) => saved = value,
       pollIncomingZone: () => null,
       getCursorPosition: () => null,
+      loadHandoffEnabled: () => false,
     ));
 
     await tester.tap(find.text('Ajustes'));
@@ -77,6 +79,7 @@ void main() {
       loadThemePreference: () => AppThemePreference.system,
       saveThemePreference: (_) {},
       getCursorPosition: () => null,
+      loadHandoffEnabled: () => false,
       pollIncomingZone: () {
         if (polled) return null;
         polled = true;
@@ -97,5 +100,33 @@ void main() {
     expect(store.zones, hasLength(1));
     expect(store.zones.single.targetDeviceId, 'pc-windows');
     expect(store.zones.single.edge, HotZoneEdge.left);
+  });
+
+  testWidgets(
+      'notificação de conexão/desconexão aparece de verdade na árvore real'
+      ' do app (ConnectionLossOverlay precisa estar DENTRO do MaterialApp,'
+      ' não por fora, senão não acha o ScaffoldMessenger)',
+      (WidgetTester tester) async {
+    final connectionStatus = ConnectionStatusNotifier();
+
+    await tester.pumpWidget(AltCrossApp(
+      store: HotZoneConfigStore(),
+      localHotZoneStore: LocalHotZoneStore(),
+      connectionStatus: connectionStatus,
+      displayProvider: () => const [
+        PhysicalDisplay(x: 0, y: 0, width: 1920, height: 1080, isPrimary: true),
+      ],
+      discoveryRunner: ({timeoutMs = 0, maxResults = 0}) async => [],
+      loadThemePreference: () => AppThemePreference.system,
+      saveThemePreference: (_) {},
+      pollIncomingZone: () => null,
+      getCursorPosition: () => null,
+      loadHandoffEnabled: () => false,
+    ));
+
+    connectionStatus.updateStatus('pc-windows', false);
+    await tester.pump();
+
+    expect(find.textContaining('pc-windows desconectou'), findsOneWidget);
   });
 }

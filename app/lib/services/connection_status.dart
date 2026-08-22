@@ -15,16 +15,18 @@ class ConnectionStatusNotifier extends ChangeNotifier {
   /// Inicia o monitoramento. Chamar uma única vez (ex.: no main ou
   /// ao montar o MaterialApp com [NavigatorState]).
   void start() {
-    AltCrossNative.startConnectionMonitor(
-      onStatusChange: (deviceId, online) {
-        if (!online) {
-          _offlineDevices.add(deviceId);
-        } else {
-          _offlineDevices.remove(deviceId);
-        }
-        notifyListeners();
-      },
-    );
+    AltCrossNative.startConnectionMonitor(onStatusChange: updateStatus);
+  }
+
+  /// Aplica uma mudança de status de peer — chamado pelo callback nativo em
+  /// `start()`, e diretamente por testes (sem precisar do FFI de verdade).
+  void updateStatus(String deviceId, bool online) {
+    if (!online) {
+      _offlineDevices.add(deviceId);
+    } else {
+      _offlineDevices.remove(deviceId);
+    }
+    notifyListeners();
   }
 
   void stop() {
@@ -33,10 +35,14 @@ class ConnectionStatusNotifier extends ChangeNotifier {
     _offlineDevices.clear();
   }
 
-  /// Descarta o dispositivo da lista de offline (chamado quando o usuário
-  /// fecha a notificação).
-  void dismissDevice(String deviceId) {
-    _offlineDevices.remove(deviceId);
-    notifyListeners();
+  /// Reinicia o monitor pra ele reler a lista de pareados do disco agora —
+  /// o Core só carrega essa lista uma vez, em `start()` (ver
+  /// `altcross_connection_monitor_start`/`populate_peers_from_store`), então
+  /// sem isso um dispositivo pareado DEPOIS do app já aberto nunca entra no
+  /// heartbeat e nunca gera notificação de conexão/desconexão. Chamar isso
+  /// logo depois de qualquer pareamento novo.
+  void refresh() {
+    stop();
+    start();
   }
 }

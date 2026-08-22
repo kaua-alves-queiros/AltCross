@@ -10,6 +10,7 @@ import 'native/altcross_native.dart';
 import 'screens/connections_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/connection_status.dart';
+import 'services/handoff_activation.dart';
 import 'services/hot_zone_config_persistence.dart';
 import 'services/local_hotzone_persistence.dart';
 import 'services/local_hotzone_warp.dart';
@@ -98,8 +99,14 @@ class AltCrossApp extends StatefulWidget {
   final WarpCursor warpCursor;
   final LoadThemePreference loadThemePreference;
   final SaveThemePreference saveThemePreference;
+  final LoadHandoffEnabled loadHandoffEnabled;
+  final SaveHandoffEnabled saveHandoffEnabled;
+  final LookupTrustedHost lookupHost;
+  final QueryPeerScreens queryPeerScreens;
+  final StartHandoff startHandoff;
+  final IsHandoffRemote isHandoffActive;
 
-  const AltCrossApp({
+  AltCrossApp({
     super.key,
     required this.store,
     required this.localHotZoneStore,
@@ -115,6 +122,12 @@ class AltCrossApp extends StatefulWidget {
     WarpCursor? warpCursor,
     LoadThemePreference? loadThemePreference,
     SaveThemePreference? saveThemePreference,
+    LoadHandoffEnabled? loadHandoffEnabled,
+    SaveHandoffEnabled? saveHandoffEnabled,
+    LookupTrustedHost? lookupHost,
+    QueryPeerScreens? queryPeerScreens,
+    StartHandoff? startHandoff,
+    IsHandoffRemote? isHandoffActive,
   })  : displayProvider = displayProvider ?? AltCrossNative.enumerateDisplays,
         pollIncomingZone = pollIncomingZone ?? AltCrossNative.pollIncomingZone,
         getCursorPosition =
@@ -123,7 +136,16 @@ class AltCrossApp extends StatefulWidget {
         loadThemePreference =
             loadThemePreference ?? SettingsStore.loadThemePreference,
         saveThemePreference =
-            saveThemePreference ?? SettingsStore.saveThemePreference;
+            saveThemePreference ?? SettingsStore.saveThemePreference,
+        loadHandoffEnabled =
+            loadHandoffEnabled ?? SettingsStore.loadHandoffEnabled,
+        saveHandoffEnabled =
+            saveHandoffEnabled ?? SettingsStore.saveHandoffEnabled,
+        lookupHost = lookupHost ?? AltCrossNative.lookupTrustedHost,
+        queryPeerScreens = queryPeerScreens ??
+            ((host) => AltCrossNative.queryPeerScreens(peerHost: host)),
+        startHandoff = startHandoff ?? AltCrossNative.startHandoff,
+        isHandoffActive = isHandoffActive ?? AltCrossNative.isHandoffActive;
 
   @override
   State<AltCrossApp> createState() => _AltCrossAppState();
@@ -131,6 +153,7 @@ class AltCrossApp extends StatefulWidget {
 
 class _AltCrossAppState extends State<AltCrossApp> {
   late AppThemePreference _themePreference;
+  late bool _handoffEnabled;
   Timer? _incomingZonePollTimer;
   Timer? _cursorWarpTimer;
 
@@ -138,6 +161,7 @@ class _AltCrossAppState extends State<AltCrossApp> {
   void initState() {
     super.initState();
     _themePreference = widget.loadThemePreference();
+    _handoffEnabled = widget.loadHandoffEnabled();
     // Vive no nível do app (não numa tela específica) — a sincronização de
     // arranjo entre hosts precisa funcionar mesmo com o usuário na Home ou
     // em Ajustes, não só quando o Arranjo/Conexões está aberto.
@@ -149,6 +173,22 @@ class _AltCrossAppState extends State<AltCrossApp> {
     // 1 leitura de posição + 1 enumeração local — leve, sem rede.
     _cursorWarpTimer = Timer.periodic(
         const Duration(milliseconds: 40), (_) => _checkCursorWarp());
+    // Controle entre dispositivos é "sempre ligado" por padrão — tenta
+    // ligar assim que o app abre, sem depender do usuário abrir a tela de
+    // Conexões primeiro. Silencioso de propósito: sem zona pareada ainda
+    // (1ª execução) isso falha sempre, e não faz sentido avisar disso antes
+    // mesmo do usuário ter feito qualquer coisa — a tela de Conexões
+    // (`ConnectionsScreen`, com o mesmo checkbox) continua tentando de novo
+    // sozinha depois, e aí sim mostra o que está acontecendo.
+    if (_handoffEnabled && !widget.isHandoffActive()) {
+      activateHandoff(
+        store: widget.store,
+        lookupHost: widget.lookupHost,
+        queryPeerScreens: widget.queryPeerScreens,
+        localDisplaysProvider: widget.displayProvider,
+        startHandoff: widget.startHandoff,
+      );
+    }
   }
 
   @override
@@ -203,16 +243,29 @@ class _AltCrossAppState extends State<AltCrossApp> {
     setState(() => _themePreference = preference);
   }
 
+  void _changeHandoffEnabled(bool enabled) {
+    widget.saveHandoffEnabled(enabled);
+    setState(() => _handoffEnabled = enabled);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ConnectionLossOverlay(
-      notifier: widget.connectionStatus,
-      child: MaterialApp(
-        title: 'AltCross',
-        theme: AppTheme.light(),
-        darkTheme: AppTheme.dark(),
-        themeMode: _toThemeMode(_themePreference),
-        home: HomeScreen(
+    return MaterialApp(
+      title: 'AltCross',
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: _toThemeMode(_themePreference),
+      // ConnectionLossOverlay entra aqui (dentro do builder), não envolvendo
+      // o MaterialApp por fora — o ScaffoldMessenger que ele precisa pra
+      // mostrar o SnackBar é criado PELO MaterialApp, então o overlay
+      // precisa estar por DENTRO da árvore dele, senão
+      // `ScaffoldMessenger.of(context)` nunca acha nada e a notificação
+      // nunca aparece (era exatamente isso que estava acontecendo).
+      builder: (context, child) => ConnectionLossOverlay(
+        notifier: widget.connectionStatus,
+        child: child!,
+      ),
+      home: HomeScreen(
         store: widget.store,
         localHotZoneStore: widget.localHotZoneStore,
         displayProvider: widget.displayProvider,
@@ -221,9 +274,11 @@ class _AltCrossAppState extends State<AltCrossApp> {
         confirmPairing: widget.confirmPairing,
         pollIncomingPairingRequest: widget.pollIncomingPairingRequest,
         pollPairingCompleted: widget.pollPairingCompleted,
+        restartConnectionMonitor: widget.connectionStatus.refresh,
+        handoffEnabled: _handoffEnabled,
+        onHandoffEnabledChanged: _changeHandoffEnabled,
         currentThemePreference: _themePreference,
         onThemePreferenceChanged: _changeThemePreference,
-      ),
       ),
     );
   }

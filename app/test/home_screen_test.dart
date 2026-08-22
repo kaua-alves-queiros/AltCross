@@ -22,6 +22,10 @@ Future<void> pumpHome(WidgetTester tester, HotZoneConfigStore store) async {
       // verdade (não disponível no ambiente de teste) assim que navegada.
       pollIncomingPairingRequest: () => null,
       isHandoffActive: () => false,
+      // idem: controle entre dispositivos vem ligado por padrão, e sem
+      // desligar aqui a ativação automática tentaria mais FFI de verdade
+      // assim que a tela de Conexões abrisse.
+      handoffEnabled: false,
     ),
   ));
 }

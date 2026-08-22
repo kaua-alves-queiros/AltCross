@@ -43,4 +43,26 @@ void main() {
 
     expect(SettingsStore.loadThemePreference(), AppThemePreference.system);
   });
+
+  test('controle entre dispositivos vem LIGADO por padrão quando nunca foi salvo',
+      () {
+    expect(SettingsStore.loadHandoffEnabled(), isTrue);
+  });
+
+  test('desligar o controle entre dispositivos persiste entre reinícios', () {
+    SettingsStore.saveHandoffEnabled(false);
+    expect(SettingsStore.loadHandoffEnabled(), isFalse);
+
+    SettingsStore.saveHandoffEnabled(true);
+    expect(SettingsStore.loadHandoffEnabled(), isTrue);
+  });
+
+  test('tema e controle entre dispositivos persistem juntos sem se atropelar',
+      () {
+    SettingsStore.saveThemePreference(AppThemePreference.dark);
+    SettingsStore.saveHandoffEnabled(false);
+
+    expect(SettingsStore.loadThemePreference(), AppThemePreference.dark);
+    expect(SettingsStore.loadHandoffEnabled(), isFalse);
+  });
 }
